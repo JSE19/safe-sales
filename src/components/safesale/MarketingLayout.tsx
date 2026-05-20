@@ -112,7 +112,7 @@ function SiteFooter() {
           <div className="md:col-span-1">
             <Logo />
             <p className="mt-3 max-w-xs text-sm text-ink-soft">
-              Trustless escrow for Instagram & WhatsApp commerce. Built for Africa.
+              Trustless escrow for social-commerce sellers. Built for Africa.
             </p>
           </div>
           <FooterCol

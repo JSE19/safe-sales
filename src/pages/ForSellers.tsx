@@ -15,7 +15,7 @@ export default function ForSellers() {
   useSeoMeta({
     title: "For sellers — SafeSale",
     description:
-      "Convert more Instagram & WhatsApp buyers. Build verified reputation. Get paid faster.",
+      "Convert more social-media buyers. Build verified reputation. Get paid faster.",
   });
   return (
     <MarketingLayout>
@@ -27,9 +27,9 @@ export default function ForSellers() {
           Sell to anyone — including buyers who've never heard of you.
         </h1>
         <p className="mt-4 max-w-2xl text-lg text-ink-soft">
-          SafeSale removes the trust barrier that makes most Instagram and
-          WhatsApp shoppers walk away. Your business stops depending on people
-          who already know you.
+          SafeSale removes the trust barrier that makes most social-media
+          shoppers walk away. Your business stops depending on people who
+          already know you.
         </p>
 
         <div className="mt-10 grid gap-4 sm:grid-cols-3">

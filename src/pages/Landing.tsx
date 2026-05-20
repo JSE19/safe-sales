@@ -28,9 +28,9 @@ import { cn } from "@/lib/utils";
 
 export default function Landing() {
   useSeoMeta({
-    title: "SafeSale — Buy safely from Instagram & WhatsApp sellers",
+    title: "SafeSale — Buy safely from social-media sellers",
     description:
-      "SafeSale is escrow for social commerce. Buyers send money, sellers ship, and SafeSale holds the funds until everyone is happy.",
+      "SafeSale is escrow for social commerce. Buyers send money, sellers ship, and SafeSale holds the funds until everyone is happy. Works wherever you can paste a link.",
   });
 
   return (
@@ -70,11 +70,7 @@ function Hero() {
           <h1 className="mt-5 text-[40px] font-bold leading-[1.05] tracking-tight text-ink sm:text-5xl lg:text-[58px]">
             Buy safely from{" "}
             <span className="bg-gradient-to-r from-brand to-emerald-600 bg-clip-text text-transparent">
-              Instagram
-            </span>{" "}
-            &{" "}
-            <span className="bg-gradient-to-r from-emerald-600 to-brand bg-clip-text text-transparent">
-              WhatsApp
+              social-media
             </span>{" "}
             sellers.
           </h1>
@@ -328,10 +324,10 @@ function WhySafeSale() {
             Africans lose ₦100B+ a year to social commerce scams.
           </h2>
           <p className="mt-4 text-base text-ink-soft">
-            Most sellers in Nigeria, Ghana, and Kenya sell from Instagram and
-            WhatsApp. Trust is the only thing holding the market back. SafeSale
-            replaces blind trust with structured, verifiable protection — so
-            small businesses can grow.
+            Most sellers in Nigeria, Ghana, and Kenya sell on social media —
+            Instagram, WhatsApp, TikTok, Telegram, X. Trust is the only thing
+            holding the market back. SafeSale replaces blind trust with
+            structured, verifiable protection — so small businesses can grow.
           </p>
 
           <ul className="mt-7 space-y-3">
@@ -750,7 +746,7 @@ function FinalCTA() {
         </div>
         <p className="relative mt-6 inline-flex items-center gap-2 text-xs text-emerald-50/80">
           <MessageCircle className="h-3.5 w-3.5" /> No credit card · No setup ·
-          Works with your existing Instagram & WhatsApp
+          Works wherever you sell — Instagram, WhatsApp, TikTok, X, Telegram, anywhere
         </p>
       </div>
     </section>
