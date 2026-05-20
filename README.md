@@ -123,4 +123,4 @@ This is an active hackathon submission. The frontend currently renders the full 
 
 ## License
 
-MIT
+TBD — the project will be open-sourced under **MIT** after the Hack4Freedom hackathon. Until then, all rights reserved.
