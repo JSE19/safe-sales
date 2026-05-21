@@ -1,462 +1,551 @@
+/**
+ * Seller Dashboard Home — `/app`
+ *
+ * The first thing a seller sees after signing up. Two states:
+ *
+ *   1. **Empty (default for new sellers)** — welcome banner, three big
+ *      action cards (Create listing / Copy shop link / Preview shop),
+ *      a "How SafeSale works" strip, and a zero-state stats row.
+ *
+ *   2. **Demo (toggle on)** — populated dashboard showing a 7-day
+ *      revenue chart, filled stats, and a recent-orders feed. Useful
+ *      for demos and for sellers who want to see what a full dashboard
+ *      will look like before they make their first sale.
+ *
+ * Design ported from a Stitch prototype; reworked to use SafeSale's
+ * existing green/ink palette, lucide-react icons, and shadcn primitives.
+ *
+ * Identity: still pulls the seller's display data from the mock
+ * `currentSeller` for now. A follow-up PR will switch the whole app
+ * to `useCurrentUser` + `useAuthor` once the buyer/seller pubkey
+ * plumbing is wired.
+ */
+
 import { useSeoMeta } from "@unhead/react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { AppShell } from "@/components/safesale/AppShell";
-import { Button } from "@/components/ui/button";
-import { Avatar } from "@/components/safesale/Avatar";
-import { EscrowStatusPill } from "@/components/safesale/EscrowStatus";
-import { ProductImage } from "@/components/safesale/ProductImage";
-import { StarRating } from "@/components/safesale/StarRating";
+
 import {
   ArrowUpRight,
-  ShieldCheck,
-  Plus,
-  Sparkles,
+  Check,
+  CheckCircle2,
   ChevronRight,
-  TrendingUp,
-  Banknote,
-  CircleDollarSign,
+  Copy,
+  Eye,
   Link2 as LinkIcon,
-  Scale,
-  Building2,
+  Lock,
+  Plus,
+  TrendingUp,
+  Truck,
+  X,
 } from "lucide-react";
-import { currentSeller, disputes, earnings, listings, orders } from "@/lib/mock";
-import { formatNGN, formatNumber, formatRelative, formatSats } from "@/lib/format";
-import { useMemo } from "react";
+
+import { AppShell } from "@/components/safesale/AppShell";
+import { Avatar } from "@/components/safesale/Avatar";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { useToast } from "@/hooks/useToast";
+import { currentSeller, orders } from "@/lib/mock";
+import { formatNGN, formatSats } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export default function DashboardHome() {
-  useSeoMeta({ title: "Dashboard — SafeSale" });
+  useSeoMeta({ title: "Home — SafeSale" });
 
-  const activeOrders = useMemo(
-    () =>
-      orders.filter((o) =>
-        ["pending_payment", "payment_locked", "shipped", "delivered"].includes(
-          o.status
-        )
-      ),
-    []
+  const [demoMode, setDemoMode] = useState(false);
+
+  // TODO: replace with useCurrentUser() + useAuthor() so seller's name
+  // and handle come from their kind 0 profile event.
+  const seller = currentSeller;
+  const firstName = seller.name.split(" ")[0];
+  const shopUrl = `safesale.app/@${seller.handle}`;
+
+  const action = (
+    <div className="flex items-center justify-between gap-3">
+      <DemoToggle value={demoMode} onChange={setDemoMode} />
+      <Button
+        asChild
+        size="sm"
+        className="h-9 bg-brand text-brand-foreground hover:bg-brand/90"
+      >
+        <Link to="/app/listings">
+          <Plus className="mr-1 h-4 w-4" />
+          New listing
+        </Link>
+      </Button>
+    </div>
   );
 
-  const recent = orders.slice(0, 4);
-  const maxWeekly = Math.max(...earnings.weekly.map((w) => w.value));
-
   return (
-    <AppShell
-      title={`Hi, ${currentSeller.name.split(" ")[0]} 👋`}
-      subtitle="Here's how your shop is doing today."
-    >
-      <div className="space-y-6">
-        {/* Hero balance card */}
-        <section className="relative overflow-hidden rounded-2xl border border-emerald-200/60 bg-gradient-to-br from-brand to-emerald-700 p-6 text-white shadow-[0_18px_50px_-22px_rgba(15,42,30,0.4)]">
-          <div className="absolute -right-12 -top-12 h-44 w-44 rounded-full bg-emerald-400/30 blur-3xl" />
-          <div className="absolute -bottom-12 -left-8 h-44 w-44 rounded-full bg-emerald-300/20 blur-3xl" />
-
-          <div className="relative flex items-start justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-emerald-100/80">
-                Available to withdraw
-              </p>
-              <p className="mt-1.5 text-3xl font-semibold tracking-tight sm:text-4xl">
-                {formatNGN(earnings.availableNGN)}
-              </p>
-              <div className="mt-2 flex flex-col gap-1 text-xs text-emerald-50/80">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  {formatNGN(earnings.pendingNGN)} held safely in escrow
-                </div>
-                <div className="flex items-center gap-2">
-                  <Building2 className="h-3.5 w-3.5" />
-                  Pours into GTB ****2841
-                </div>
-              </div>
-            </div>
-            <Button
-              asChild
-              size="sm"
-              className="h-9 rounded-lg bg-white px-4 text-sm font-semibold text-brand hover:bg-emerald-50"
-            >
-              <Link to="/app/earnings">Withdraw</Link>
-            </Button>
-          </div>
-
-          <div className="relative mt-6 grid grid-cols-3 gap-2 rounded-xl bg-white/10 p-3 backdrop-blur-sm">
-            <MiniStat label="This month" value={formatNGN(earnings.thisMonthNGN)} />
-            <MiniStat
-              label="Lifetime"
-              value={formatNGN(earnings.totalLifetimeNGN)}
-            />
-            <MiniStat
-              label="Sats balance"
-              value={formatSats(earnings.satsBalance)}
-              gold
-            />
-          </div>
-        </section>
-
-        {/* Quick actions */}
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <QuickAction
-            to="/app/payment-requests"
-            label="New pay link"
-            icon={LinkIcon}
-            primary
-          />
-          <QuickAction
-            to="/app/listings"
-            label="New listing"
-            icon={Plus}
-          />
-          <QuickAction
-            to="/app/orders"
-            label="Active orders"
-            badge={String(activeOrders.length)}
-            icon={CircleDollarSign}
-          />
-          <QuickAction
-            to={`/${currentSeller.handle}`}
-            label="View public shop"
-            icon={Sparkles}
-          />
-        </div>
-
-        {/* Active disputes alert (only when there are any) */}
-        <ActiveDisputesAlert />
-
-        {/* Two-column on large screens */}
-        <div className="grid gap-6 lg:grid-cols-3">
-          {/* Weekly chart */}
-          <Section
-            title="This week"
-            subtitle="Daily revenue locked in escrow"
-            action={
-              <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
-                <TrendingUp className="h-3.5 w-3.5" /> +28% vs last week
-              </span>
-            }
-            className="lg:col-span-2"
-          >
-            <div className="grid h-44 grid-cols-7 items-end gap-2 px-2 pt-2">
-              {earnings.weekly.map((d, i) => {
-                const pct = (d.value / maxWeekly) * 100;
-                const isPeak = i === 4;
-                return (
-                  <div key={d.day} className="flex flex-col items-center gap-2">
-                    <div className="relative flex h-full w-full items-end">
-                      <div
-                        className={cn(
-                          "w-full rounded-lg transition-all",
-                          isPeak
-                            ? "bg-gradient-to-t from-brand to-emerald-400"
-                            : "bg-brand/15"
-                        )}
-                        style={{ height: `${pct}%` }}
-                      />
-                    </div>
-                    <span className="text-[10px] font-medium text-ink-soft">
-                      {d.day}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </Section>
-
-          {/* Reputation snapshot */}
-          <Section
-            title="Reputation"
-            subtitle={`@${currentSeller.handle}`}
-            action={
-              <Link
-                to="/app/reputation"
-                className="text-xs font-medium text-brand hover:underline"
-              >
-                View all
-              </Link>
-            }
-          >
-            <div className="flex items-center gap-3">
-              <Avatar
-                seed={currentSeller.avatarSeed}
-                name={currentSeller.name}
-                size={48}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-1.5">
-                  <p className="text-2xl font-semibold text-ink">
-                    {currentSeller.rating.toFixed(1)}
-                  </p>
-                  <StarRating rating={currentSeller.rating} size={12} />
-                </div>
-                <p className="text-xs text-ink-soft">
-                  from {currentSeller.reviews} verified reviews
-                </p>
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-2 text-center">
-              <div className="rounded-lg border border-border bg-surface-2/30 p-3">
-                <p className="text-base font-semibold text-ink">
-                  {formatNumber(currentSeller.completedOrders)}
-                </p>
-                <p className="text-[10px] uppercase tracking-wider text-ink-soft">
-                  Completed
-                </p>
-              </div>
-              <div className="rounded-lg border border-border bg-surface-2/30 p-3">
-                <p className="text-base font-semibold text-ink">
-                  {currentSeller.responseTimeMins}m
-                </p>
-                <p className="text-[10px] uppercase tracking-wider text-ink-soft">
-                  Reply time
-                </p>
-              </div>
-            </div>
-          </Section>
-        </div>
-
-        {/* Active orders */}
-        <Section
-          title="Active orders"
-          subtitle="Orders waiting on you or the buyer."
-          action={
-            <Link to="/app/orders" className="text-xs font-medium text-brand hover:underline">
-              View all
-            </Link>
-          }
-        >
-          <ul className="divide-y divide-border">
-            {recent.map((o) => {
-              const listing = listings.find((l) => l.id === o.listingId);
-              return (
-                <li key={o.id}>
-                  <Link
-                    to={`/app/orders/${o.shortId}`}
-                    className="flex items-center gap-3 py-3 transition-colors hover:bg-surface-2/30"
-                  >
-                    {listing && (
-                      <ProductImage
-                        image={listing.images[0]}
-                        className="h-12 w-12"
-                        rounded="rounded-lg"
-                      />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-medium text-ink">
-                          {listing?.title ?? "Order"}
-                        </p>
-                      </div>
-                      <p className="mt-0.5 truncate text-xs text-ink-soft">
-                        {o.shortId} · {o.buyerName} · {formatRelative(o.createdAt)}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-semibold text-ink">
-                        {formatNGN(o.amountNGN)}
-                      </p>
-                      <EscrowStatusPill status={o.status} size="sm" className="mt-1" />
-                    </div>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-ink-soft" />
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </Section>
-
-        {/* Recent activity */}
-        <Section title="Recent activity">
-          <ul className="space-y-3">
-            <ActivityItem
-              icon={Banknote}
-              tone="brand"
-              title="Payout completed"
-              desc={`${formatNGN(124500)} sent to GTB ****2841`}
-              when="2 days ago"
-            />
-            <ActivityItem
-              icon={ShieldCheck}
-              tone="brand"
-              title="Payment locked"
-              desc="SS-7421 · Vintage Denim Jacket"
-              when="3 hours ago"
-            />
-            <ActivityItem
-              icon={Sparkles}
-              tone="gold"
-              title="New 5-star review"
-              desc='"The bag arrived exactly as described."'
-              when="2 days ago"
-            />
-            <ActivityItem
-              icon={ArrowUpRight}
-              tone="brand"
-              title="Listing performance up"
-              desc="Vintage Denim Jacket viewed 184× today"
-              when="today"
-            />
-          </ul>
-        </Section>
-      </div>
+    <AppShell title="Home" subtitle="Overview and quick actions." action={action}>
+      {demoMode ? (
+        <DemoDashboard seller={seller} />
+      ) : (
+        <EmptyDashboard
+          seller={seller}
+          firstName={firstName}
+          shopUrl={shopUrl}
+        />
+      )}
     </AppShell>
   );
 }
 
-function Section({
-  title,
-  subtitle,
-  action,
-  children,
-  className,
+/* -------------------------------------------------------------------------- */
+/*                              Empty state                                   */
+/* -------------------------------------------------------------------------- */
+
+function EmptyDashboard({
+  seller,
+  firstName,
+  shopUrl,
 }: {
-  title: string;
-  subtitle?: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-  className?: string;
+  seller: typeof currentSeller;
+  firstName: string;
+  shopUrl: string;
 }) {
+  const [welcomeOpen, setWelcomeOpen] = useState(true);
+  const [howOpen, setHowOpen] = useState(true);
+  const { toast } = useToast();
+
+  const copyShopUrl = () => {
+    navigator.clipboard?.writeText(`https://${shopUrl}`).then(() => {
+      toast({ title: "Shop link copied" });
+    });
+  };
+
   return (
-    <section
-      className={cn(
-        "rounded-2xl border border-border bg-white p-5 shadow-[0_8px_24px_-16px_rgba(15,42,30,0.12)]",
-        className
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-ink">{title}</h2>
-          {subtitle && (
-            <p className="mt-0.5 text-xs text-ink-soft">{subtitle}</p>
-          )}
+    <div className="space-y-8">
+      {welcomeOpen && (
+        <div className="relative flex items-start justify-between gap-4 rounded-2xl border border-brand/20 bg-brand/5 p-5">
+          <div>
+            <h3 className="flex items-center gap-2 text-base font-semibold text-ink">
+              Welcome, {firstName}
+              <span aria-hidden className="text-xl">👋</span>
+            </h3>
+            <p className="mt-1 text-sm text-ink-soft">
+              Let's get your first sale. Set up your shop in minutes.
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss welcome banner"
+            onClick={() => setWelcomeOpen(false)}
+            className="text-ink-soft transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
-        {action}
+      )}
+
+      {/* 3-card action grid */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <ActionCard
+          emphasized
+          icon={Plus}
+          title="Create your first listing"
+          body="Add details, photos, and set your price in sats."
+          cta="Create listing"
+          to="/app/listings"
+        />
+
+        <CardShell>
+          <CardIcon icon={LinkIcon} />
+          <h4 className="text-base font-semibold text-ink">Copy your shop link</h4>
+          <p className="mt-1 flex-1 text-sm text-ink-soft">
+            Paste it in your Instagram bio, WhatsApp About, TikTok profile, X bio — anywhere you sell.
+          </p>
+          <div className="mt-4 flex items-center gap-2">
+            <div className="flex-1 truncate rounded-full bg-surface px-3 py-1.5 font-mono text-xs text-ink-soft">
+              {shopUrl}
+            </div>
+            <button
+              type="button"
+              onClick={copyShopUrl}
+              aria-label="Copy shop link"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+            >
+              <Copy className="h-4 w-4" />
+            </button>
+          </div>
+        </CardShell>
+
+        <CardShell>
+          <CardIcon icon={Eye} />
+          <h4 className="text-base font-semibold text-ink">Preview your shop</h4>
+          <p className="mt-1 flex-1 text-sm text-ink-soft">
+            See what buyers see before you share.
+          </p>
+          <Button
+            asChild
+            variant="outline"
+            className="mt-4 w-full"
+          >
+            <Link to={`/${seller.handle}`}>
+              Open public shop
+              <ArrowUpRight className="ml-1 h-4 w-4" />
+            </Link>
+          </Button>
+        </CardShell>
       </div>
-      <div className="mt-4">{children}</div>
-    </section>
+
+      {/* How SafeSale works */}
+      <section className="rounded-2xl border border-border bg-white p-6">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+          onClick={() => setHowOpen((v) => !v)}
+          aria-expanded={howOpen}
+        >
+          <h4 className="text-base font-semibold text-ink">
+            How SafeSale works for sellers
+          </h4>
+          <ChevronRight
+            className={cn(
+              "h-4 w-4 text-ink-soft transition-transform",
+              howOpen && "rotate-90",
+            )}
+          />
+        </button>
+
+        {howOpen && (
+          <div className="mt-5 grid gap-6 border-t border-border pt-5 md:grid-cols-3">
+            <HowStep
+              n={1}
+              icon={Lock}
+              label="Buyer pays into escrow"
+              body="Their sats are locked safely. They can't be touched without your delivery."
+            />
+            <HowStep
+              n={2}
+              icon={Truck}
+              label="You ship the order"
+              body="Mark it shipped with a tracking number once it's on the way."
+            />
+            <HowStep
+              n={3}
+              icon={CheckCircle2}
+              label="Get paid in sats"
+              body="Buyer confirms receipt → funds release instantly via Lightning."
+            />
+          </div>
+        )}
+      </section>
+
+      {/* Stats row (zero-state) */}
+      <section>
+        <h3 className="mb-4 text-base font-semibold text-ink">Overview</h3>
+        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+          <ZeroStat label="Sats earned" hint="Start selling to see your first payout" />
+          <ZeroStat label="Orders" hint="No orders yet" />
+          <ZeroStat label="Reviews" hint="No reviews yet" />
+          <ZeroStat label="Buyers reached" hint="Share your shop link to grow" />
+        </div>
+        <p className="mt-4 text-center text-xs text-ink-soft">
+          Your stats will appear here once you make your first sale.
+        </p>
+      </section>
+    </div>
   );
 }
 
-function MiniStat({ label, value, gold }: { label: string; value: string; gold?: boolean }) {
+/* -------------------------------------------------------------------------- */
+/*                              Demo state                                    */
+/* -------------------------------------------------------------------------- */
+
+const DEMO_DAYS = [
+  { day: "Mon", sats: 4800 },
+  { day: "Tue", sats: 6200 },
+  { day: "Wed", sats: 3100 },
+  { day: "Thu", sats: 9700 },
+  { day: "Fri", sats: 12500 },
+  { day: "Sat", sats: 11200 },
+  { day: "Sun", sats: 8800 },
+];
+
+function DemoDashboard({ seller }: { seller: typeof currentSeller }) {
+  const recent = orders.slice(0, 4);
+  const maxBar = Math.max(...DEMO_DAYS.map((d) => d.sats));
+
   return (
-    <div className="text-center">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-emerald-100/80">
-        {label}
-      </p>
-      <p
-        className={cn(
-          "mt-1 text-sm font-semibold tracking-tight",
-          gold ? "text-amber-200" : "text-white"
-        )}
-      >
-        {value}
+    <div className="space-y-6">
+      {/* Filled stats */}
+      <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+        <FilledStat
+          label="Sats earned"
+          value={formatSats(248_500)}
+          sub={`~${formatNGN(362_000)}`}
+          trend
+        />
+        <FilledStat label="Orders (30d)" value="12" />
+        <FilledStat label="Reviews" value="4.9 ★" sub="9 total" />
+        <FilledStat label="Unique buyers" value="14" />
+      </div>
+
+      {/* Chart + Recent orders */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <section className="rounded-2xl border border-border bg-white p-6 lg:col-span-2">
+          <div className="mb-6 flex items-center justify-between">
+            <h3 className="text-base font-semibold text-ink">7-Day Revenue</h3>
+            <select
+              defaultValue="7d"
+              aria-label="Time range"
+              className="rounded-lg bg-surface px-2 py-1 text-xs font-medium text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+            >
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+            </select>
+          </div>
+          <div className="grid h-44 grid-cols-7 items-end gap-3 pt-2">
+            {DEMO_DAYS.map((d) => {
+              const pct = (d.sats / maxBar) * 100;
+              return (
+                <div key={d.day} className="flex flex-col items-center gap-2">
+                  <div className="relative flex h-full w-full items-end">
+                    <div
+                      className="w-full rounded-md bg-gradient-to-t from-brand to-emerald-400 transition-all"
+                      style={{ height: `${pct}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-medium text-ink-soft">
+                    {d.day}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-border bg-white p-6">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-base font-semibold text-ink">Recent orders</h3>
+            <Link
+              to="/app/orders"
+              className="text-xs font-medium text-brand hover:underline"
+            >
+              View all
+            </Link>
+          </div>
+          <ul className="divide-y divide-border">
+            {recent.map((o, i) => {
+              const initials = o.buyerName
+                .split(" ")
+                .slice(0, 2)
+                .map((s) => s[0])
+                .join("");
+              return (
+                <li key={o.id ?? i} className="flex items-center gap-3 py-3">
+                  <Avatar
+                    seed={o.id ?? `o-${i}`}
+                    name={o.buyerName}
+                    size={36}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-ink">
+                      {o.buyerName}
+                    </p>
+                    <p className="truncate text-xs text-ink-soft">
+                      {formatSats(o.amountSats ?? 12500)} ·{" "}
+                      {formatNGN(o.amountNGN ?? 18200)}
+                    </p>
+                  </div>
+                  <DemoBadge status={o.status} />
+                  <span className="sr-only">{initials}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      </div>
+
+      <p className="text-center text-xs text-ink-soft">
+        Demo data — toggle off to see {seller.name.split(" ")[0]}'s real dashboard.
       </p>
     </div>
   );
 }
 
-function QuickAction({
-  to,
-  label,
-  icon: Icon,
-  badge,
-  primary,
+/* -------------------------------------------------------------------------- */
+/*                              Reusable pieces                               */
+/* -------------------------------------------------------------------------- */
+
+function DemoToggle({
+  value,
+  onChange,
 }: {
-  to: string;
-  label: string;
+  value: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-xs font-medium text-ink-soft">
+      Demo data
+      <Switch
+        checked={value}
+        onCheckedChange={onChange}
+        aria-label="Toggle demo data"
+      />
+    </label>
+  );
+}
+
+function ActionCard({
+  icon: Icon,
+  title,
+  body,
+  cta,
+  to,
+  emphasized,
+}: {
   icon: React.ComponentType<{ className?: string }>;
-  badge?: string;
-  primary?: boolean;
+  title: string;
+  body: string;
+  cta: string;
+  to: string;
+  emphasized?: boolean;
 }) {
   return (
     <Link
       to={to}
       className={cn(
-        "flex items-center justify-between rounded-2xl border p-4 transition-all hover:-translate-y-0.5",
-        primary
-          ? "border-brand/30 bg-brand text-brand-foreground shadow-[0_12px_30px_-16px_color-mix(in_oklab,var(--brand)_70%,transparent)] hover:bg-brand/90"
-          : "border-border bg-white text-ink hover:shadow-[0_8px_20px_-14px_rgba(15,42,30,0.18)]"
+        "group flex h-full flex-col rounded-2xl border bg-white p-6 transition-all hover:shadow-[0_8px_20px_-14px_rgba(15,42,30,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+        emphasized
+          ? "border-brand/40 ring-1 ring-brand/10 hover:border-brand"
+          : "border-border hover:border-ink/20",
       )}
     >
-      <div className="flex items-center gap-3">
-        <span
-          className={cn(
-            "inline-flex h-10 w-10 items-center justify-center rounded-lg",
-            primary ? "bg-white/15 text-white" : "bg-brand-soft text-brand-soft-foreground"
-          )}
-        >
-          <Icon className="h-5 w-5" />
-        </span>
-        <span className="text-sm font-semibold">{label}</span>
-      </div>
-      {badge ? (
-        <span
-          className={cn(
-            "rounded-full px-2 py-0.5 text-xs font-semibold",
-            primary ? "bg-white/15 text-white" : "bg-brand-soft text-brand-soft-foreground"
-          )}
-        >
-          {badge}
-        </span>
-      ) : (
-        <ChevronRight className={cn("h-4 w-4", primary ? "text-white/80" : "text-ink-soft")} />
-      )}
-    </Link>
-  );
-}
-
-function ActivityItem({
-  icon: Icon,
-  title,
-  desc,
-  when,
-  tone,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  desc: string;
-  when: string;
-  tone: "brand" | "gold";
-}) {
-  return (
-    <li className="flex items-start gap-3">
+      <CardIcon icon={Icon} emphasized={emphasized} />
+      <h4 className="text-base font-semibold text-ink">{title}</h4>
+      <p className="mt-1 flex-1 text-sm text-ink-soft">{body}</p>
       <span
         className={cn(
-          "mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-full",
-          tone === "brand"
-            ? "bg-brand-soft text-brand-soft-foreground"
-            : "bg-gold-soft text-amber-700"
+          "mt-4 inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+          emphasized
+            ? "bg-brand text-brand-foreground group-hover:bg-brand/90"
+            : "bg-surface text-ink group-hover:bg-surface/70",
         )}
       >
-        <Icon className="h-4 w-4" />
+        {cta}
+        <ChevronRight className="ml-1 h-4 w-4" />
       </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-ink">{title}</p>
-        <p className="truncate text-xs text-ink-soft">{desc}</p>
-      </div>
-      <span className="text-[11px] text-ink-soft">{when}</span>
-    </li>
+    </Link>
   );
 }
 
-function ActiveDisputesAlert() {
-  const active = disputes.filter((d) => d.status !== "resolved");
-  if (active.length === 0) return null;
+function CardShell({ children }: { children: React.ReactNode }) {
   return (
-    <Link
-      to="/app/dispute"
-      className="group flex items-center gap-3 rounded-2xl border border-rose-200/70 bg-rose-50/60 p-4 transition-colors hover:bg-rose-50"
+    <div className="flex h-full flex-col rounded-2xl border border-border bg-white p-6 transition-all hover:shadow-[0_8px_20px_-14px_rgba(15,42,30,0.18)]">
+      {children}
+    </div>
+  );
+}
+
+function CardIcon({
+  icon: Icon,
+  emphasized,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  emphasized?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "mb-4 inline-flex h-12 w-12 items-center justify-center rounded-full",
+        emphasized ? "bg-brand/10 text-brand" : "bg-surface text-ink-soft",
+      )}
     >
-      <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-rose-100 text-rose-700">
-        <Scale className="h-5 w-5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-ink">
-          {active.length} active dispute{active.length === 1 ? "" : "s"} need your response
-        </p>
-        <p className="mt-0.5 truncate text-xs text-ink-soft">
-          Share evidence calmly — most cases resolve within 24 hours.
-        </p>
+      <Icon className="h-5 w-5" />
+    </div>
+  );
+}
+
+function HowStep({
+  n,
+  icon: Icon,
+  label,
+  body,
+}: {
+  n: number;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  body: string;
+}) {
+  return (
+    <div className="flex flex-col items-center text-center">
+      <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-full bg-surface text-ink-soft">
+        <Icon className="h-4 w-4" />
       </div>
-      <ChevronRight className="h-4 w-4 shrink-0 text-rose-700 transition-transform group-hover:translate-x-0.5" />
-    </Link>
+      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink">
+        {n}. {label}
+      </p>
+      <p className="text-xs text-ink-soft">{body}</p>
+    </div>
+  );
+}
+
+function ZeroStat({ label, hint }: { label: string; hint: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-white p-4">
+      <p className="mb-1 text-xs text-ink-soft">{label}</p>
+      <p className="text-2xl font-semibold text-ink tabular-nums">0</p>
+      <p className="mt-1 text-[11px] text-ink-soft">{hint}</p>
+    </div>
+  );
+}
+
+function FilledStat({
+  label,
+  value,
+  sub,
+  trend,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  trend?: boolean;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-white p-4">
+      <div className="mb-1 flex items-center justify-between text-xs text-ink-soft">
+        {label}
+        {trend && <TrendingUp className="h-3.5 w-3.5 text-brand" />}
+      </div>
+      <p className="text-2xl font-semibold text-ink tabular-nums">{value}</p>
+      {sub && <p className="mt-1 text-[11px] text-ink-soft">{sub}</p>}
+    </div>
+  );
+}
+
+function DemoBadge({ status }: { status: string }) {
+  const map: Record<string, { bg: string; text: string; label: string }> = {
+    payment_locked: {
+      bg: "bg-amber-100",
+      text: "text-amber-800",
+      label: "Payment locked",
+    },
+    shipped: { bg: "bg-blue-100", text: "text-blue-800", label: "Shipped" },
+    delivered: { bg: "bg-blue-100", text: "text-blue-800", label: "Delivered" },
+    released: {
+      bg: "bg-emerald-100",
+      text: "text-emerald-800",
+      label: "Complete",
+    },
+    disputed: { bg: "bg-rose-100", text: "text-rose-800", label: "Disputed" },
+  };
+  const s = map[status] ?? {
+    bg: "bg-surface",
+    text: "text-ink-soft",
+    label: status,
+  };
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap",
+        s.bg,
+        s.text,
+      )}
+    >
+      <Check className="h-2.5 w-2.5 opacity-60" />
+      {s.label}
+    </span>
   );
 }
