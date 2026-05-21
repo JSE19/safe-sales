@@ -12,12 +12,12 @@ import { EscrowShield } from "@/components/safesale/EscrowShield";
 import { Countdown } from "@/components/safesale/Countdown";
 import { useListing } from "@/hooks/useListing";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { getSeller as getFixtureSeller } from "@/lib/mock";
-import { apiClient, ApiError, type ApiBitnobAccount, type ApiOrder } from "@/lib/api";
+import { apiClient, ApiError, type ApiOrder } from "@/lib/api";
 import { formatNGN } from "@/lib/format";
 import { genUserName } from "@/lib/genUserName";
 import { useToast } from "@/hooks/useToast";
+import { generateBuyerKey, persistBuyerKey } from "@/lib/buyerKey";
 import {
   ShieldCheck,
   ChevronLeft,
@@ -49,7 +49,6 @@ type Step = "details" | "instructions" | "waiting" | "detected" | "secured";
 export default function Checkout() {
   const { id = "" } = useParams<{ id: string }>();
   const { data: listing, isLoading: listingLoading } = useListing(id);
-  const { user } = useCurrentUser();
   const sellerPubkey = listing?.sellerPubkey;
   const author = useAuthor(sellerPubkey);
   const fixtureSeller = sellerPubkey ? getFixtureSeller(sellerPubkey) : undefined;
@@ -83,11 +82,17 @@ export default function Checkout() {
    * step. Once we have a token, the polling effect below will keep
    * `liveOrder` fresh so the UI can react to backend state changes
    * (e.g. webhook → payment_locked).
+   *
+   * Shape mirrors the flat `CreateOrderResponse` returned by
+   * `POST /api/orders` on the real backend — orderToken + Bitnob virtual
+   * account details + expiry. No nested `bitnob` object.
    */
   const [createdOrder, setCreatedOrder] = useState<{
-    token: string;
-    bitnob?: ApiBitnobAccount;
-    bitnobExpiresAt?: string;
+    orderToken: string;
+    shortId: string;
+    bitnobAccount: string;
+    bitnobBank: string;
+    expiresAt: string;
   } | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -95,13 +100,17 @@ export default function Checkout() {
   // Poll the order's current state once we have a token. The mock
   // client transitions pending_payment → payment_locked ~5s after
   // createOrder, simulating the Bitnob webhook landing.
+  //
+  // `apiClient.getOrder` returns the full `{order, listing, seller, dispute}`
+  // envelope; for checkout we only care about `order.status`.
   const { data: liveOrder } = useQuery<ApiOrder | null>({
-    queryKey: ["safesale", "order", createdOrder?.token ?? ""],
-    enabled: !!createdOrder?.token,
+    queryKey: ["safesale", "order", createdOrder?.orderToken ?? ""],
+    enabled: !!createdOrder?.orderToken,
     queryFn: async () => {
       if (!createdOrder) return null;
       try {
-        return await apiClient.getOrder(createdOrder.token);
+        const env = await apiClient.getOrder(createdOrder.orderToken);
+        return env.order;
       } catch (err) {
         if (err instanceof ApiError && err.code === "ORDER_NOT_FOUND") {
           return null;
@@ -169,7 +178,12 @@ export default function Checkout() {
   // a real account. Computed via useState initializer (the one place a
   // hook is allowed to call Date.now()), and stable for the lifetime
   // of the page so the Countdown doesn't reset across re-renders.
-  const [placeholderBitnob] = useState<ApiBitnobAccount>(() => ({
+  const [placeholderBitnob] = useState<{
+    accountNumber: string;
+    bankName: string;
+    accountName: string;
+    expiresAt: string;
+  }>(() => ({
     accountNumber: "—",
     bankName: "—",
     accountName: "SafeSale Escrow",
@@ -202,9 +216,26 @@ export default function Checkout() {
 
   // ------------------------------------------------------------------
   //  Order creation — fires when the user taps "Continue to payment"
-  //  on the instructions screen. The backend (or mock) issues a Bitnob
-  //  virtual account and returns it; we render the details and wait
-  //  for the user to confirm they've actually sent the transfer.
+  //  on the instructions screen.
+  //
+  //  1. Generate a one-time Nostr keypair in the browser for the buyer.
+  //     The nsec is persisted to `localStorage` under
+  //     `safesale:buyer:<orderToken>` so the Buyer Order Page can read
+  //     it back later to sign the Cashu P2PK release.
+  //  2. Send the corresponding npub to the backend along with the
+  //     buyer's name / phone / city / address (the real backend on
+  //     `origin/backend` requires these fields — see
+  //     `routes/orders.ts::CreateOrderSchema`).
+  //  3. Store the flat `CreateOrderResponse` (orderToken + Bitnob
+  //     virtual account details) so the Instructions step can render
+  //     them.
+  //
+  //  KEY ORDER MATTERS: we generate-and-persist the keypair BEFORE
+  //  awaiting createOrder so that if the user refreshes mid-call (or
+  //  the network drops) we don't end up with a token on the backend
+  //  pointing at an npub whose nsec was never written to disk.
+  //  Worst case: an orphan key under a token that doesn't exist. Best
+  //  case: success. Either way the release flow is never blocked.
   // ------------------------------------------------------------------
 
   const handleIssueAccount = async () => {
@@ -212,20 +243,44 @@ export default function Checkout() {
     setCreating(true);
     setCreateError(null);
     try {
-      const listingCoord = `30018:${listing.sellerPubkey}:${listing.id}`;
-      const buyerContact = contactMethod === "email" ? email : phone;
+      // Step 1: pre-generate a tentative token-less key? No — we don't
+      // have the token yet. The backend generates it. So we generate
+      // the key first, then create the order with the resulting npub,
+      // then persist the nsec under the returned token in a single
+      // tick once we have it.
+      const tentativeKey = generateBuyerKey("__pending__");
       const res = await apiClient.createOrder({
-        listingCoord,
-        deliveryAddress: `${address}, ${city}`,
-        buyerContact,
-        contactChannel: contactMethod === "email" ? "email" : "sms",
-        buyerPubkey: user?.pubkey,
+        listingId: listing.id,
+        buyerNpub: tentativeKey.npub,
+        buyerName: name.trim(),
+        buyerPhone: phone.trim(),
+        buyerEmail: email.trim() || undefined,
+        buyerCity: city.trim(),
+        buyerAddress: address.trim() || undefined,
+        contactMethod,
+        variant: listing.tags?.[0],
       });
 
+      // Re-persist the keypair under the real orderToken, then drop
+      // the tentative entry. This atomic-feeling swap guarantees that
+      // `getBuyerKey(orderToken)` works the moment the buyer arrives
+      // at /order/:token.
+      persistBuyerKey(res.orderToken, {
+        nsec: tentativeKey.nsec,
+        npub: tentativeKey.npub,
+      });
+      try {
+        localStorage.removeItem("safesale:buyer:__pending__");
+      } catch {
+        // best-effort cleanup
+      }
+
       setCreatedOrder({
-        token: res.order.token,
-        bitnob: res.order.bitnob,
-        bitnobExpiresAt: res.order.bitnobExpiresAt,
+        orderToken: res.orderToken,
+        shortId: res.shortId,
+        bitnobAccount: res.bitnobAccount,
+        bitnobBank: res.bitnobBank,
+        expiresAt: res.expiresAt,
       });
     } catch (err) {
       const msg =
@@ -273,9 +328,24 @@ export default function Checkout() {
   // The Bitnob account details come from the API response. In real mode
   // these are issued by Bitnob; in mock mode the mock client makes them
   // up. Either way they're per-order and survive across polls.
-  const bitnob: ApiBitnobAccount = createdOrder?.bitnob ?? placeholderBitnob;
-  const bitnobExpiresAt =
-    createdOrder?.bitnobExpiresAt ?? bitnob.expiresAt;
+  //
+  // Backend returns a flat `{ bitnobAccount, bitnobBank, expiresAt, ... }`
+  // (no nested object), so we synthesize the small shape the Instructions
+  // panel and Countdown need from those flat fields.
+  const bitnob: {
+    accountNumber: string;
+    bankName: string;
+    accountName: string;
+    expiresAt: string;
+  } = createdOrder
+    ? {
+        accountNumber: createdOrder.bitnobAccount,
+        bankName: createdOrder.bitnobBank,
+        accountName: "SafeSale Escrow",
+        expiresAt: createdOrder.expiresAt,
+      }
+    : placeholderBitnob;
+  const bitnobExpiresAt = createdOrder?.expiresAt ?? bitnob.expiresAt;
 
   const heroImage = sanitizeUrl(listing.images[0]);
 
@@ -343,10 +413,10 @@ export default function Checkout() {
             {step === "secured" && createdOrder && (
               <Secured
                 amount={listing.priceNGN}
-                orderToken={createdOrder.token}
+                orderToken={createdOrder.orderToken}
                 contactMethod={contactMethod}
                 contactValue={contactMethod === "email" ? email : phone}
-                onContinue={() => navigate(`/order/${createdOrder.token}`)}
+                onContinue={() => navigate(`/order/${createdOrder.orderToken}`)}
               />
             )}
           </div>
@@ -615,7 +685,12 @@ function Instructions({
   error,
 }: {
   amount: number;
-  bitnob: ApiBitnobAccount;
+  bitnob: {
+    accountNumber: string;
+    bankName: string;
+    accountName: string;
+    expiresAt: string;
+  };
   expiresAt: string;
   onConfirm: () => void;
   pending: boolean;
