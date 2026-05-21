@@ -29,17 +29,17 @@ Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ 
 | # | Page | Route | Audience | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | Seller Onboarding | `/onboarding` | Seller | ✅ | Stitch HTML received; convert to `.tsx` when we loop back |
-| 2 | Seller Dashboard — Home | `/app` | Seller | ⏭ | next prompt to write |
-| 3 | Seller Dashboard — Listings Panel | `/app/listings` | Seller | ⬜ | |
-| 4 | Seller Dashboard — Listing Create / Edit | `/app/listings/new` (modal or page) | Seller | ⬜ | decide modal vs. dedicated page when we get there |
-| 5 | Seller Dashboard — Orders Panel | `/app/orders` | Seller | ⬜ | |
-| 6 | Seller Dashboard — Order Detail | `/app/orders/:id` | Seller | ⬜ | has the "Mark as Shipped" action |
-| 7 | Seller Dashboard — Earnings Panel | `/app/earnings` | Seller | ⬜ | Bitnob cash-out |
-| 8 | Seller Dashboard — Reputation Panel | `/app/reputation` | Seller | ⬜ | aggregated reviews + shareable npub link |
-| 9 | Seller Dashboard — Profile & Identity / Settings | `/app/settings` | Seller | ⬜ | screen does not exist in code yet — create new |
-| 10 | Public Listing page | `/buy/:id` | Buyer | ⬜ | |
-| 11 | Buyer Checkout | `/checkout/:id` | Buyer | ⬜ | Bitnob virtual account display |
-| 12 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ⬜ | most critical buyer screen |
+| 2 | Public Listing page | `/buy/:id` | Buyer | ⏭ | **next prompt to write** — the link buyers see first |
+| 3 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML received; convert to `.tsx` when we loop back |
+| 4 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ⬜ | most critical buyer screen |
+| 5 | Seller Dashboard — Home | `/app` | Seller | ⬜ | |
+| 6 | Seller Dashboard — Listings Panel | `/app/listings` | Seller | ⬜ | |
+| 7 | Seller Dashboard — Listing Create / Edit | `/app/listings/new` (modal or page) | Seller | ⬜ | decide modal vs. dedicated page when we get there |
+| 8 | Seller Dashboard — Orders Panel | `/app/orders` | Seller | ⬜ | |
+| 9 | Seller Dashboard — Order Detail | `/app/orders/:id` | Seller | ⬜ | has the "Mark as Shipped" action |
+| 10 | Seller Dashboard — Earnings Panel | `/app/earnings` | Seller | ⬜ | Bitnob cash-out |
+| 11 | Seller Dashboard — Reputation Panel | `/app/reputation` | Seller | ⬜ | aggregated reviews + shareable npub link |
+| 12 | Seller Dashboard — Profile & Identity / Settings | `/app/settings` | Seller | ⬜ | screen does not exist in code yet — create new |
 | 13 | Buyer Dispute Form | modal inside #12 | Buyer | ⬜ | |
 | 14 | Buyer Return-flow page | sub-flow of #13 | Buyer | ⬜ | damaged-return edge case |
 | 15 | Seller Public Storefront | `/:handle` | Public | ⬜ | |
@@ -79,6 +79,17 @@ Standard mkstack hooks plus:
 
 ### Nostr event spec
 - `NIP.md` defines kinds `30018` (listings), `33888` (orders), `33889` (dispute resolutions), `1985` (reviews), `1059` (DMs)
+
+---
+
+## Saved Stitch outputs
+
+Raw HTML from Stitch is saved under `.stitch-designs/` (one file per page) so we never lose a design to a crash again. After conversion to `.tsx`, the file stays in place as historical reference.
+
+| Page | HTML file |
+|---|---|
+| 1 — Seller Onboarding | `.stitch-designs/01-onboarding.html` |
+| 3 — Buyer Checkout | `.stitch-designs/03-checkout.html` |
 
 ---
 
