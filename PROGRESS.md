@@ -29,7 +29,7 @@ Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ 
 | # | Screen | Route | Audience | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | Seller Onboarding | `/onboarding` | New seller | ✅ | Stitch HTML in `.stitch-designs/01-onboarding.html` |
-| 2 | Seller Dashboard Home | `/app` | Seller | ⬜ | |
+| 2 | Seller Dashboard Home | `/app` | Seller | 🟡 | Stitch prompt sent (`.stitch-designs/02-seller-dashboard.prompt.md`), awaiting HTML |
 | 3 | Seller Listings (list + create) | `/app/listings` | Seller | ⬜ | |
 | 4 | Seller Orders (list + detail with "Mark Shipped") | `/app/orders` & `/app/orders/:id` | Seller | ⬜ | |
 | 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | |
@@ -84,6 +84,7 @@ Raw HTML from Stitch is committed to `.stitch-designs/` so we never lose a desig
 | 6 — Public Listing | `.stitch-designs/06-public-listing.prompt.md` | `.stitch-designs/06-public-listing.html` |
 | 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/03-checkout.html` (numbered from old ordering; safe to rename when next file lands) |
 | 8 — Buyer Order Page | `.stitch-designs/08-buyer-order.prompt.md` | `.stitch-designs/08-buyer-order.html` |
+| 2 — Seller Dashboard Home | `.stitch-designs/02-seller-dashboard.prompt.md` | _(awaiting Stitch)_ |
 
 ---
 
