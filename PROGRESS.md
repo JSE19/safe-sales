@@ -35,7 +35,7 @@ Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ 
 | 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | |
 | 6 | Public Listing | `/buy/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/06-public-listing.html` → React in `src/pages/PublicListing.tsx`; wired to `useListing` (Nostr kind 30018 → fixture fallback for cold demos) |
 | 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/03-checkout.html` |
-| 8 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ⬜ | most critical buyer screen |
+| 8 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | 🟡 | most critical buyer screen — Stitch prompt sent (`.stitch-designs/08-buyer-order.prompt.md`), awaiting HTML |
 | 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | |
 
 **Progress: 3 / 9 complete.**
@@ -83,6 +83,7 @@ Raw HTML from Stitch is committed to `.stitch-designs/` so we never lose a desig
 | 1 — Seller Onboarding | _(prompt not archived; predates convention)_ | `.stitch-designs/01-onboarding.html` |
 | 6 — Public Listing | `.stitch-designs/06-public-listing.prompt.md` | `.stitch-designs/06-public-listing.html` |
 | 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/03-checkout.html` (numbered from old ordering; safe to rename when next file lands) |
+| 8 — Buyer Order Page | `.stitch-designs/08-buyer-order.prompt.md` | _(awaiting Stitch)_ |
 
 ---
 
