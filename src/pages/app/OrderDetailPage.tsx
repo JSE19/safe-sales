@@ -26,7 +26,6 @@ import { formatDate, formatNGN, formatRelative, formatTime } from "@/lib/format"
 import {
   ArrowLeft,
   Truck,
-  MessageCircle,
   Copy,
   Phone,
   AlertTriangle,
@@ -224,13 +223,6 @@ export default function OrderDetailPage() {
                   toast({ title: "Phone copied" })
                 )
               } />
-            </div>
-            <div className="mt-3 flex gap-2">
-              <Button asChild variant="outline" size="sm" className="h-8 flex-1">
-                <Link to="/app/chat">
-                  <MessageCircle className="mr-1 h-3.5 w-3.5" /> Message
-                </Link>
-              </Button>
             </div>
           </Section>
 

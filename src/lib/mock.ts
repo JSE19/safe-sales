@@ -3,7 +3,6 @@ import type {
   Dispute,
   Listing,
   Order,
-  PaymentRequest,
   PayoutEntry,
   Review,
   Seller,
@@ -583,50 +582,6 @@ export const earnings = {
     { day: "Sun", value: 19500 },
   ],
 };
-
-/* -------------------------------------------------------------------------- */
-/* Payment requests (custom one-tap pay links for negotiated orders).         */
-/* -------------------------------------------------------------------------- */
-
-export const paymentRequests: PaymentRequest[] = [
-  {
-    id: "pr_1",
-    code: "X7K2N4",
-    sellerId: "seller_amaka",
-    amountNGN: 35000,
-    description: "Silk wrap dress (UK 10, emerald) — custom order",
-    buyerNote: "For Funke from IG",
-    status: "pending",
-    createdAt: iso(-2 * HOUR),
-    expiresAt: iso(22 * HOUR),
-  },
-  {
-    id: "pr_2",
-    code: "A9PL3M",
-    sellerId: "seller_amaka",
-    amountNGN: 67500,
-    description: "Coach leather crossbody — held for Funke",
-    status: "paid",
-    createdAt: iso(-2 * DAY),
-    expiresAt: iso(-1 * DAY),
-    paidAt: iso(-1.5 * DAY),
-    paidBy: "Funke O.",
-  },
-  {
-    id: "pr_3",
-    code: "T1Q8WZ",
-    sellerId: "seller_amaka",
-    amountNGN: 14000,
-    description: "Vintage tee bundle — 3 pieces",
-    status: "expired",
-    createdAt: iso(-4 * DAY),
-    expiresAt: iso(-2.5 * DAY),
-  },
-];
-
-export function getPaymentRequest(code: string): PaymentRequest | undefined {
-  return paymentRequests.find((p) => p.code.toLowerCase() === code.toLowerCase());
-}
 
 /* -------------------------------------------------------------------------- */
 /* Handle availability (used during onboarding).                              */

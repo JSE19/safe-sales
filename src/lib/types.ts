@@ -1,11 +1,20 @@
+/**
+ * Order escrow status. Aligned with BACKEND.md `OrderStatus` enum.
+ * `completed` is a legacy frontend-only synonym for `released`; new code
+ * should prefer `released`. Once mocks are fully replaced with backend
+ * data the `completed` value will be removed.
+ */
 export type EscrowStatus =
   | "pending_payment"
   | "payment_locked"
   | "shipped"
   | "delivered"
+  | "released"
   | "completed"
   | "disputed"
-  | "refunded";
+  | "resolved"
+  | "refunded"
+  | "expired";
 
 export interface Seller {
   id: string;
@@ -161,20 +170,6 @@ export interface DisputeResolution {
   reasoning: string;
   mediator: string;
   resolvedAt: string;
-}
-
-export interface PaymentRequest {
-  id: string;
-  code: string;            // short code used in URL: safesale.to/pay/X7K2
-  sellerId: string;
-  amountNGN: number;
-  description: string;
-  buyerNote?: string;
-  status: "pending" | "paid" | "expired" | "cancelled";
-  createdAt: string;
-  expiresAt: string;
-  paidAt?: string;
-  paidBy?: string;
 }
 
 export interface ChatMessage {

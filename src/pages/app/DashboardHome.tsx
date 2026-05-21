@@ -82,7 +82,6 @@ export default function DashboardHome() {
         <DemoDashboard seller={seller} />
       ) : (
         <EmptyDashboard
-          seller={seller}
           firstName={firstName}
           shopUrl={shopUrl}
         />
@@ -96,11 +95,9 @@ export default function DashboardHome() {
 /* -------------------------------------------------------------------------- */
 
 function EmptyDashboard({
-  seller,
   firstName,
   shopUrl,
 }: {
-  seller: typeof currentSeller;
   firstName: string;
   shopUrl: string;
 }) {
@@ -172,17 +169,17 @@ function EmptyDashboard({
 
         <CardShell>
           <CardIcon icon={Eye} />
-          <h4 className="text-base font-semibold text-ink">Preview your shop</h4>
+          <h4 className="text-base font-semibold text-ink">Browse your listings</h4>
           <p className="mt-1 flex-1 text-sm text-ink-soft">
-            See what buyers see before you share.
+            Edit prices, photos and stock — or copy a shareable link.
           </p>
           <Button
             asChild
             variant="outline"
             className="mt-4 w-full"
           >
-            <Link to={`/${seller.handle}`}>
-              Open public shop
+            <Link to="/app/listings">
+              Open listings
               <ArrowUpRight className="ml-1 h-4 w-4" />
             </Link>
           </Button>

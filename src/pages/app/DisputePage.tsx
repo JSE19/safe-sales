@@ -297,16 +297,13 @@ function DisputeDetailView({ dispute }: { dispute: Dispute }) {
           />
         </section>
 
-        {/* Chat embed */}
+        {/* Chat embed (preview of NIP-17 thread for this order) */}
         <section className="rounded-2xl border border-border bg-white p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">Order chat</h2>
-            <Link
-              to="/app/chat"
-              className="inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline"
-            >
-              Open full chat <MessageCircle className="h-3 w-3" />
-            </Link>
+            <span className="text-[11px] font-medium text-ink-soft">
+              Most recent messages
+            </span>
           </div>
           <ul className="mt-4 space-y-3">
             {chat.slice(-3).map((m) => (
