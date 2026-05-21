@@ -33,12 +33,12 @@ Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ 
 | 3 | Seller Listings (list + create) | `/app/listings` | Seller | ⬜ | |
 | 4 | Seller Orders (list + detail with "Mark Shipped") | `/app/orders` & `/app/orders/:id` | Seller | ⬜ | |
 | 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | |
-| 6 | Public Listing | `/buy/:id` | Buyer | 🟡 | Stitch HTML received → `.stitch-designs/06-public-listing.html`. Next: convert to React + wire to real `useListing` hook. |
+| 6 | Public Listing | `/buy/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/06-public-listing.html` → React in `src/pages/PublicListing.tsx`; wired to `useListing` (Nostr kind 30018 → fixture fallback for cold demos) |
 | 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/03-checkout.html` |
 | 8 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ⬜ | most critical buyer screen |
 | 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | |
 
-**Progress: 2 / 9 complete.**
+**Progress: 3 / 9 complete.**
 
 ### Deferred (not part of the 9 — polish or build later)
 
