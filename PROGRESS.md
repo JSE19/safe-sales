@@ -33,7 +33,7 @@ Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ 
 | 3 | Seller Listings (list + create) | `/app/listings` | Seller | ⬜ | |
 | 4 | Seller Orders (list + detail with "Mark Shipped") | `/app/orders` & `/app/orders/:id` | Seller | ⬜ | |
 | 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | |
-| 6 | Public Listing | `/buy/:id` | Buyer | ⏭ | **next prompt to write** — completes the buyer flow that already has Checkout |
+| 6 | Public Listing | `/buy/:id` | Buyer | 🟡 | Prompt sent — see `.stitch-designs/06-public-listing.prompt.md`. Awaiting Stitch HTML. |
 | 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/03-checkout.html` |
 | 8 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ⬜ | most critical buyer screen |
 | 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | |
@@ -53,12 +53,13 @@ Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ 
 
 ## Saved Stitch outputs
 
-Raw HTML from Stitch is committed to `.stitch-designs/` so we never lose a design to a crash again. After conversion to `.tsx`, the file stays as historical reference.
+Raw HTML from Stitch is committed to `.stitch-designs/` so we never lose a design to a crash again. After conversion to `.tsx`, the file stays as historical reference. Prompts sent to Stitch are committed as `NN-<slug>.prompt.md` next to their eventual HTML.
 
-| Screen | HTML file |
-|---|---|
-| 1 — Seller Onboarding | `.stitch-designs/01-onboarding.html` |
-| 7 — Buyer Checkout | `.stitch-designs/03-checkout.html` (numbered from old ordering; safe to rename when next file lands) |
+| Screen | Prompt | HTML output |
+|---|---|---|
+| 1 — Seller Onboarding | _(prompt not archived; predates convention)_ | `.stitch-designs/01-onboarding.html` |
+| 6 — Public Listing | `.stitch-designs/06-public-listing.prompt.md` | _(pending)_ |
+| 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/03-checkout.html` (numbered from old ordering; safe to rename when next file lands) |
 
 ---
 
