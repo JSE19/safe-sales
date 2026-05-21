@@ -55,3 +55,26 @@ export function formatCountdown(targetIso: string, now = Date.now()): string {
   if (hours > 0) return `${hours}h ${mins}m ${secs.toString().padStart(2, "0")}s`;
   return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
+
+/**
+ * Long-form countdown — "6d 14h 22m" or "5h 12m" or "Less than a minute".
+ *
+ * Used for the buyer-order page auto-release countdown, which is up to
+ * 7 days long and would be visually noisy with the seconds-granularity
+ * version above.
+ */
+export function formatCountdownLong(targetIso: string, now = Date.now()): string {
+  const target = new Date(targetIso).getTime();
+  const diff = target - now;
+  if (diff <= 0) return "now";
+  const totalMins = Math.floor(diff / 60_000);
+  if (totalMins < 1) return "less than a minute";
+  const days = Math.floor(totalMins / (60 * 24));
+  const hours = Math.floor((totalMins % (60 * 24)) / 60);
+  const mins = totalMins % 60;
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (days === 0 && mins > 0) parts.push(`${mins}m`);
+  return parts.join(" ") || `${mins}m`;
+}
