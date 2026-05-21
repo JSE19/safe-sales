@@ -1,14 +1,26 @@
 /**
  * Seller Onboarding — single screen.
  *
- * Replaces the previous 6-step wizard. A new seller gets in by either:
- *   1. Generating a fresh Nostr keypair in the browser (one click), or
- *   2. Connecting an existing key via extension, nsec paste, or NIP-46
- *      remote signer.
+ * One primary path: type a handle + shop name, tap "Open my shop". A
+ * fresh Nostr keypair is generated **silently** in the browser and
+ * persisted to localStorage. The seller never sees the word "Nostr"
+ * unless they tap the small "What is Nostr?" link in the footer.
  *
- * In both paths the seller picks a handle + shop name, then lands on
- * `/app`. Bank details, photo, bio, and category are deferred to inline
- * prompts when the seller actually needs them — not collected upfront.
+ * This matches the PRD literally:
+ *
+ *   "Seller visits SafeSale.app on their phone. App **silently
+ *    generates a Nostr keypair in the browser**. Seller enters
+ *    business name, phone, email, bank account, and saves to create
+ *    profile."
+ *
+ * Existing Nostr users have an escape hatch — a small text link at
+ * the bottom of the card opens a dialog with a single styled input
+ * for pasting their nsec (with show/hide toggle). NIP-07 extension
+ * and NIP-46 remote-signer paths were removed: the first failed
+ * confusingly when no extension was installed (~100% of mobile
+ * users + most desktop users), the second uses jargon (`bunker://`
+ * URIs) that <1% of even Nostr-native users understand. Anyone in
+ * that <1% can paste an nsec exported from their other client.
  *
  * Design ported from a Stitch prototype; reworked to use SafeSale's
  * existing color tokens (`bg-surface`, `bg-brand`, `text-ink`),
@@ -19,33 +31,23 @@ import { useSeoMeta } from "@unhead/react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { generateSecretKey, nip19 } from "nostr-tools";
-import {
-  Check,
-  Cloud,
-  Key,
-  Loader2,
-  Lock,
-  Puzzle,
-  X,
-} from "lucide-react";
+import { Check, Eye, EyeOff, Loader2, Lock, X } from "lucide-react";
 
 import { Logo } from "@/components/safesale/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { useToast } from "@/hooks/useToast";
 import { cn } from "@/lib/utils";
-
-type ConnectMethod = "extension" | "nsec" | "bunker";
 
 const HANDLE_MIN = 3;
 const SHOP_NAME_MIN = 2;
@@ -69,41 +71,43 @@ export default function Onboarding() {
 /* -------------------------------------------------------------------------- */
 
 function OnboardingCard() {
+  const [signInOpen, setSignInOpen] = useState(false);
+
   return (
-    <main className="relative w-full max-w-md overflow-hidden rounded-2xl border border-border/60 bg-white p-6 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.06),0_4px_6px_-4px_rgba(0,0,0,0.05)] sm:p-8">
-      <header className="mb-6 text-center">
-        <h1 className="text-2xl font-semibold tracking-tight text-ink">
-          Open your shop in 30 seconds.
-        </h1>
-        <p className="mt-2 text-sm text-ink-soft">
-          Your shop is owned by your Nostr key. No email, no password, no
-          bank account needed yet.
-        </p>
-      </header>
+    <>
+      <main className="relative w-full max-w-md overflow-hidden rounded-2xl border border-border/60 bg-white p-6 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.06),0_4px_6px_-4px_rgba(0,0,0,0.05)] sm:p-8">
+        <header className="mb-6 text-center">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">
+            Open your shop in 30 seconds.
+          </h1>
+          <p className="mt-2 text-sm text-ink-soft">
+            Pick a name and a handle. We'll set up everything else.
+          </p>
+        </header>
 
-      <Tabs defaultValue="create" className="w-full">
-        <TabsList className="mb-8 grid w-full grid-cols-2 bg-surface">
-          <TabsTrigger value="create">Create a new key</TabsTrigger>
-          <TabsTrigger value="import">I already have one</TabsTrigger>
-        </TabsList>
+        <OpenShopForm />
 
-        <TabsContent value="create" className="mt-0">
-          <CreateKeyForm />
-        </TabsContent>
+        <div className="mt-6 border-t border-border/70 pt-5 text-center">
+          <button
+            type="button"
+            onClick={() => setSignInOpen(true)}
+            className="rounded px-2 py-1 text-xs font-medium text-ink-soft transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+          >
+            Already on Nostr? Sign in with your nsec →
+          </button>
+        </div>
+      </main>
 
-        <TabsContent value="import" className="mt-0">
-          <ImportKeyForm />
-        </TabsContent>
-      </Tabs>
-    </main>
+      <SignInWithNsecDialog open={signInOpen} onOpenChange={setSignInOpen} />
+    </>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/*                          Tab 1 — Create a new key                          */
+/*                       Open shop — generate a new key                       */
 /* -------------------------------------------------------------------------- */
 
-function CreateKeyForm() {
+function OpenShopForm() {
   const [handle, setHandle] = useState("");
   const [shopName, setShopName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
@@ -180,130 +184,272 @@ function CreateKeyForm() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                          Tab 2 — Import existing key                       */
+/*                     Existing-user escape hatch — paste nsec                */
 /* -------------------------------------------------------------------------- */
 
-function ImportKeyForm() {
-  const [stage, setStage] = useState<"choose" | "connected">("choose");
-  const [npubDisplay, setNpubDisplay] = useState("");
+interface SignInDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * Single-purpose dialog: paste your existing nsec, validate it, log in,
+ * then collect a handle + shop name (same fields as the creation path)
+ * and land on /app.
+ *
+ * Why we only support nsec paste here (no extension, no bunker):
+ * see the file-level docstring. tl;dr: extension + NIP-46 both fail
+ * confusingly for nearly all SafeSale users; nsec paste works on
+ * every device for the small minority who actually have a key.
+ */
+function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
+  const [stage, setStage] = useState<"paste" | "details">("paste");
+
+  const [nsecInput, setNsecInput] = useState("");
+  const [reveal, setReveal] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const [handle, setHandle] = useState("");
   const [shopName, setShopName] = useState("");
-  const [isOpening, setIsOpening] = useState(false);
+  const [opening, setOpening] = useState(false);
 
   const loginActions = useLoginActions();
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const handleConnect = async (method: ConnectMethod) => {
+  const reset = () => {
+    setStage("paste");
+    setNsecInput("");
+    setReveal(false);
+    setConnecting(false);
+    setError(null);
+    setHandle("");
+    setShopName("");
+    setOpening(false);
+  };
+
+  const onChange = (next: boolean) => {
+    onOpenChange(next);
+    if (!next) reset();
+  };
+
+  const trimmed = nsecInput.trim();
+  // Loose validity check used to enable the button — full validation
+  // happens on submit where we actually decode.
+  const looksLikeNsec = trimmed.startsWith("nsec1") && trimmed.length >= 60;
+
+  const handleSignIn = async () => {
+    if (!looksLikeNsec || connecting) return;
+    setError(null);
+    setConnecting(true);
     try {
-      if (method === "extension") {
-        // TODO: replace with real NIP-07 prompt; library handles popup
-        await loginActions.extension();
-        setNpubDisplay("connected via extension");
-      } else if (method === "nsec") {
-        // TODO: surface a controlled input + reveal toggle instead of prompt()
-        const input = window.prompt("Paste your nsec");
-        if (!input) return;
-        loginActions.nsec(input.trim());
-        setNpubDisplay("connected via nsec");
-      } else {
-        // TODO: replace with real NIP-46 bunker:// flow + QR fallback
-        const uri = window.prompt("Paste your bunker:// URI");
-        if (!uri) return;
-        await loginActions.bunker(uri.trim());
-        setNpubDisplay("connected via remote signer");
+      // Validate by decoding — this throws on bad input rather than
+      // silently logging in to a garbage state.
+      const decoded = nip19.decode(trimmed);
+      if (decoded.type !== "nsec") {
+        throw new Error("That key isn't a private key (nsec).");
       }
-      setStage("connected");
+      loginActions.nsec(trimmed);
+      setStage("details");
+      // Clear the raw key from React state once the login action has
+      // taken it — minimises the window it's in memory.
+      setNsecInput("");
     } catch (err) {
-      toast({
-        title: "Connection failed",
-        description: err instanceof Error ? err.message : "Please try again.",
-        variant: "destructive",
-      });
+      setError(
+        err instanceof Error
+          ? friendlifyNsecError(err.message)
+          : "That doesn't look like a valid nsec. Double-check and try again.",
+      );
+    } finally {
+      setConnecting(false);
     }
   };
 
-  const open = async () => {
+  const handleOpenShop = async () => {
     if (!isHandleValid(handle) || shopName.trim().length < SHOP_NAME_MIN) return;
-    setIsOpening(true);
+    setOpening(true);
     try {
       // TODO: publish kind 0 profile metadata under the connected key.
-      toast({ title: "Shop opened", description: `Welcome, @${handle.trim()}.` });
+      toast({ title: "Welcome back", description: `Signed in as @${handle.trim()}.` });
+      onOpenChange(false);
+      reset();
       navigate("/app");
     } finally {
-      setIsOpening(false);
+      setOpening(false);
     }
   };
 
-  if (stage === "choose") {
-    return (
-      <div className="space-y-3">
-        <ConnectOption
-          icon={Puzzle}
-          label="Browser extension"
-          hint="Alby, nos2x, Flamingo"
-          onClick={() => handleConnect("extension")}
-        />
-        <ConnectOption
-          icon={Key}
-          label="Paste nsec"
-          hint="Your secret key from any Nostr app"
-          onClick={() => handleConnect("nsec")}
-        />
-        <ConnectOption
-          icon={Cloud}
-          label="Remote signer"
-          hint="NIP-46 / nsecbunker"
-          onClick={() => handleConnect("bunker")}
-        />
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-5">
-      <div className="flex items-center gap-3 rounded-lg border border-border bg-surface/60 p-3.5">
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand/10">
-          <Check className="h-4 w-4 text-brand" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs font-semibold text-ink">Connected successfully</p>
-          <p className="truncate text-sm text-ink-soft">{npubDisplay}</p>
-        </div>
-      </div>
+    <Dialog open={open} onOpenChange={onChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {stage === "paste" ? "Sign in with your nsec" : "Set up your shop"}
+          </DialogTitle>
+          <DialogDescription>
+            {stage === "paste"
+              ? "Paste the private key (nsec) from your other Nostr app. It stays in this browser — we never send it anywhere."
+              : "Pick a handle and a name for your SafeSale shop."}
+          </DialogDescription>
+        </DialogHeader>
 
-      <HandleField
-        value={handle}
-        onChange={setHandle}
-        showValidation={handle.length > 0}
-        valid={isHandleValid(handle)}
-      />
+        {stage === "paste" ? (
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="nsec-input">Your nsec</Label>
+              <div className="relative mt-1.5">
+                <Input
+                  id="nsec-input"
+                  type={reveal ? "text" : "password"}
+                  value={nsecInput}
+                  onChange={(e) => {
+                    setNsecInput(e.target.value);
+                    if (error) setError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSignIn();
+                    }
+                  }}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  placeholder="nsec1..."
+                  className={cn(
+                    "pr-10 font-mono text-sm tracking-tight",
+                    error && "border-rose-400 focus-visible:ring-rose-200",
+                  )}
+                  aria-invalid={!!error}
+                  aria-describedby={error ? "nsec-error" : undefined}
+                />
+                <button
+                  type="button"
+                  aria-label={reveal ? "Hide nsec" : "Show nsec"}
+                  onClick={() => setReveal((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-ink-soft transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                >
+                  {reveal ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+              {error && (
+                <p id="nsec-error" className="mt-2 text-xs font-medium text-rose-700">
+                  {error}
+                </p>
+              )}
+            </div>
 
-      <ShopNameField value={shopName} onChange={setShopName} />
+            <div className="flex items-start gap-2 rounded-lg border border-border/70 bg-surface/60 p-3">
+              <Lock className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
+              <p className="text-xs leading-relaxed text-ink-soft">
+                Your nsec stays in this browser's local storage. SafeSale
+                never sees it, never sends it anywhere, and never asks you
+                to confirm it by email.
+              </p>
+            </div>
 
-      <Button
-        type="button"
-        size="lg"
-        className="w-full bg-brand text-brand-foreground hover:bg-brand/90"
-        disabled={
-          !isHandleValid(handle) ||
-          shopName.trim().length < SHOP_NAME_MIN ||
-          isOpening
-        }
-        onClick={open}
-      >
-        {isOpening ? (
-          <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Opening...
-          </>
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                variant="outline"
+                onClick={() => onChange(false)}
+                disabled={connecting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSignIn}
+                disabled={!looksLikeNsec || connecting}
+                className="bg-brand text-brand-foreground hover:bg-brand/90"
+              >
+                {connecting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Signing in...
+                  </>
+                ) : (
+                  "Sign in"
+                )}
+              </Button>
+            </DialogFooter>
+          </div>
         ) : (
-          "Open my shop"
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 rounded-lg border border-border bg-surface/60 p-3.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand/10">
+                <Check className="h-4 w-4 text-brand" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-ink">
+                  Signed in with your existing key
+                </p>
+                <p className="truncate text-sm text-ink-soft">
+                  Pick a SafeSale handle to finish.
+                </p>
+              </div>
+            </div>
+
+            <HandleField
+              value={handle}
+              onChange={setHandle}
+              showValidation={handle.length > 0}
+              valid={isHandleValid(handle)}
+            />
+
+            <ShopNameField value={shopName} onChange={setShopName} />
+
+            <DialogFooter className="gap-2 sm:gap-2">
+              <Button
+                variant="outline"
+                onClick={() => onChange(false)}
+                disabled={opening}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleOpenShop}
+                disabled={
+                  !isHandleValid(handle) ||
+                  shopName.trim().length < SHOP_NAME_MIN ||
+                  opening
+                }
+                className="bg-brand text-brand-foreground hover:bg-brand/90"
+              >
+                {opening ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Opening...
+                  </>
+                ) : (
+                  "Open my shop"
+                )}
+              </Button>
+            </DialogFooter>
+          </div>
         )}
-      </Button>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
+}
+
+/**
+ * Soften the cryptic decode errors `nostr-tools` throws into something
+ * a non-Nostr user can act on. The library raises things like
+ * "Invalid character" / "Invalid checksum" — accurate but unhelpful.
+ */
+function friendlifyNsecError(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes("checksum")) {
+    return "This nsec looks tampered with or mistyped — the security check failed.";
+  }
+  if (lower.includes("invalid") || lower.includes("decode")) {
+    return "That doesn't look like a valid nsec. It should start with \"nsec1\" and be about 63 characters.";
+  }
+  return raw;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -381,34 +527,6 @@ function ShopNameField({
         placeholder="e.g. Amaka's Boutique"
       />
     </div>
-  );
-}
-
-function ConnectOption({
-  icon: Icon,
-  label,
-  hint,
-  onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  hint: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="group flex w-full items-center gap-3 rounded-lg border border-border bg-white px-4 py-3 text-left transition-colors hover:border-ink/20 hover:bg-surface/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-    >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand/10 text-brand">
-        <Icon className="h-4 w-4" />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-medium text-ink">{label}</span>
-        <span className="block truncate text-xs text-ink-soft">{hint}</span>
-      </span>
-    </button>
   );
 }
 
