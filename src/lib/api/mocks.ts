@@ -26,6 +26,7 @@ import type {
   CreateOrderRequest,
   CreateOrderResponse,
   GetOrderResponse,
+  MockListingHint,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,
@@ -54,6 +55,23 @@ interface MockEnvelope {
 }
 
 const memoryOrders = new Map<string, MockEnvelope>();
+
+/**
+ * Bridge: listings the buyer flow has seen during this session that
+ * don't exist as hardcoded fixtures. Populated when Checkout calls
+ * `createOrder({ _listingHint })` for a listing it loaded over Nostr.
+ *
+ * Why this exists: the seller side publishes listings to Nostr (kind
+ * 30018, real). The buyer side reads them via `useListing` (real).
+ * But the mock API client only knows about the four hardcoded
+ * fixtures, so `createOrder({ listingId: <some-nostr-uuid> })` used
+ * to 404. This map closes the gap without making the mock module
+ * depend on a React-only Nostr context.
+ *
+ * The real backend ignores all of this — it has its own DB.
+ */
+const sessionListings = new Map<string, ApiListing>();
+const sessionSellers = new Map<string, ApiSeller>();
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -110,6 +128,12 @@ function transitionAfter(token: string, ms: number, next: ApiOrderStatus) {
 /* --------------------- fixture → API shape adapters -------------------- */
 
 function fixtureSellerToApi(sellerId: string): ApiSeller {
+  // Listings discovered over Nostr can register a custom seller stub
+  // (so the buyer order page shows the actual seller name + handle
+  // instead of falling back to currentSeller). Check that first.
+  const sessionMatch = sessionSellers.get(sellerId);
+  if (sessionMatch) return sessionMatch;
+
   const s = getSeller(sellerId) ?? currentSeller;
   // Fixtures don't carry npub/pubkey/lnAddress. Synthesize stable
   // placeholders so the UI has something to render — they only need to
@@ -131,6 +155,11 @@ function fixtureSellerToApi(sellerId: string): ApiSeller {
 }
 
 function fixtureListingToApi(listingId: string): ApiListing | null {
+  // Check the session bridge first — listings published to Nostr by
+  // the seller and discovered by the buyer this session.
+  const sessionMatch = sessionListings.get(listingId);
+  if (sessionMatch) return sessionMatch;
+
   const l = getListing(listingId);
   if (!l) return null;
   return {
@@ -149,6 +178,56 @@ function fixtureListingToApi(listingId: string): ApiListing | null {
     createdAt: l.createdAt,
     updatedAt: l.createdAt,
   };
+}
+
+/**
+ * Register a listing + (optional) seller stub the mock would otherwise
+ * 404 on. Called from `createOrder` when Checkout passes a
+ * `_listingHint`. Idempotent — re-registering the same id just
+ * overwrites the prior entry (cheap, no leak).
+ */
+function registerSessionListing(hint: MockListingHint): ApiListing {
+  const nowIsoStr = nowIso();
+  const listing: ApiListing = {
+    id: hint.id,
+    sellerId: hint.sellerId,
+    title: hint.title,
+    description: hint.description,
+    priceNGN: hint.priceNGN,
+    images: hint.images,
+    category: hint.category,
+    variants: hint.variants ?? null,
+    inStock: hint.inStock ?? 1,
+    delivery: hint.delivery ?? null,
+    active: true,
+    nostrEventId: null,
+    createdAt: nowIsoStr,
+    updatedAt: nowIsoStr,
+  };
+  sessionListings.set(hint.id, listing);
+
+  // If the seller doesn't match a fixture (and we have hint metadata),
+  // synthesize a minimal ApiSeller so the buyer order page renders the
+  // real seller's name instead of falling back to currentSeller.
+  if (!getSeller(hint.sellerId) && hint.seller) {
+    sessionSellers.set(hint.sellerId, {
+      id: hint.sellerId,
+      npub: hint.sellerId.startsWith("npub")
+        ? hint.sellerId
+        : `npub1mockseller${hint.sellerId.replace(/[^a-z0-9]/gi, "").slice(0, 16)}`,
+      pubkey: hint.sellerId,
+      handle: hint.seller.handle ?? hint.sellerId.slice(0, 12),
+      name: hint.seller.name ?? "Seller",
+      location: hint.seller.location ?? "Nigeria",
+      category: hint.category,
+      bio: null,
+      verified: hint.seller.verified ?? false,
+      lnAddress: null,
+      createdAt: nowIsoStr,
+    });
+  }
+
+  return listing;
 }
 
 function fixtureDisputeToApi(orderId: string): ApiDispute | null {
@@ -227,6 +306,15 @@ function fixtureEnvelope(token: string): MockEnvelope | null {
 
 export const mockApi = {
   async createOrder(req: CreateOrderRequest): Promise<CreateOrderResponse> {
+    // If the caller passed a listing hint, register it in the session
+    // store BEFORE looking up the listing. This makes the buyer flow
+    // work end-to-end for listings the seller just published to Nostr
+    // (and which therefore don't exist in our hardcoded fixtures).
+    // The real backend ignores the hint — it has its own DB.
+    if (req._listingHint && req._listingHint.id === req.listingId) {
+      registerSessionListing(req._listingHint);
+    }
+
     const listing = fixtureListingToApi(req.listingId);
     if (!listing) {
       throw new ApiError(

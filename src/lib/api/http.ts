@@ -95,7 +95,11 @@ async function request<T>(
 
 export const httpApi = {
   createOrder(req: CreateOrderRequest): Promise<CreateOrderResponse> {
-    return request<CreateOrderResponse>("POST", "/api/orders", req);
+    // Strip mock-only fields before sending over the wire. The real
+    // backend has no notion of `_listingHint`; the listing already
+    // exists in its Postgres DB from the seller's POST /api/listings.
+    const { _listingHint: _hint, ...body } = req;
+    return request<CreateOrderResponse>("POST", "/api/orders", body);
   },
   getOrder(token: string): Promise<GetOrderResponse> {
     return request<GetOrderResponse>(

@@ -259,6 +259,29 @@ export default function Checkout() {
         buyerAddress: address.trim() || undefined,
         contactMethod,
         variant: listing.tags?.[0],
+        // Bridge: hand the mock client the listing data so it can
+        // accept orders for listings it didn't ship with as fixtures
+        // (e.g. anything the seller just published to Nostr).
+        // The real backend silently ignores this — its DB already
+        // has the listing from the seller's POST /api/listings.
+        _listingHint: {
+          id: listing.id,
+          sellerId: listing.sellerPubkey,
+          title: listing.title,
+          description: listing.description,
+          priceNGN: listing.priceNGN,
+          images: listing.images.map((url) => ({ url })),
+          category: listing.category ?? "general",
+          variants: listing.tags ?? null,
+          inStock: listing.inStock,
+          delivery: listing.delivery ?? null,
+          seller: {
+            name: sellerName,
+            handle: fixtureSeller?.handle,
+            location: fixtureSeller?.location,
+            verified: sellerVerified,
+          },
+        },
       });
 
       // Re-persist the keypair under the real orderToken, then drop

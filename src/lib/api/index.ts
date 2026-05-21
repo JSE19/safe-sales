@@ -23,6 +23,7 @@ export type {
   CreateOrderRequest,
   CreateOrderResponse,
   GetOrderResponse,
+  MockListingHint,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,

@@ -164,8 +164,44 @@ export interface ApiDispute {
 /* ------------------------- request / response shapes ------------------- */
 
 /**
+ * Subset of an `ApiListing` that the mock client can use to register a
+ * newly-discovered listing in its in-memory store. Only relevant when
+ * the listing didn't come from a fixture — e.g. it was just published
+ * to Nostr by the seller and the buyer found it via the relay. The
+ * real backend ignores this field; on Postgres the listing already
+ * exists (the seller's POST /api/listings created it). This is the
+ * "bridge" that lets the mock pretend it has a backend DB without
+ * forcing the buyer flow to know which world it's in.
+ */
+export interface MockListingHint {
+  /** Same as CreateOrderRequest.listingId; carried for clarity. */
+  id: string;
+  sellerId: string;
+  title: string;
+  description: string;
+  priceNGN: number;
+  /** Mix of URL-based and seed-based images is fine. */
+  images: ApiListingImage[];
+  category: string;
+  variants?: string[] | null;
+  inStock?: number;
+  delivery?: string | null;
+  /** Optional seller-side display info for the mock seller stub. */
+  seller?: {
+    name?: string;
+    handle?: string;
+    location?: string;
+    verified?: boolean;
+  };
+}
+
+/**
  * `POST /api/orders` request body. Field names match the Zod schema in
  * `backend/src/routes/orders.ts::CreateOrderSchema`.
+ *
+ * The optional `_listingHint` field is **mock-only** and is stripped
+ * by the real HTTP client before serialization. See `MockListingHint`
+ * for why it exists.
  */
 export interface CreateOrderRequest {
   /** cuid from `GET /api/listings/:id`. */
@@ -179,6 +215,9 @@ export interface CreateOrderRequest {
   buyerAddress?: string;
   contactMethod?: "phone" | "email";
   variant?: string;
+
+  /** @internal — mock-only. The HTTP client strips this. */
+  _listingHint?: MockListingHint;
 }
 
 /**
