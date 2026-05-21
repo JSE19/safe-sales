@@ -60,6 +60,14 @@ const styles: Record<EscrowStatus, StyleSpec> = {
     ring: "ring-emerald-200/70",
     Icon: CheckCircle2,
   },
+  released: {
+    label: "Released",
+    dot: "bg-emerald-600",
+    bg: "bg-emerald-50",
+    text: "text-emerald-800",
+    ring: "ring-emerald-200/70",
+    Icon: CheckCircle2,
+  },
   disputed: {
     label: "Dispute open",
     dot: "bg-rose-500",
@@ -68,6 +76,14 @@ const styles: Record<EscrowStatus, StyleSpec> = {
     ring: "ring-rose-200/70",
     Icon: AlertTriangle,
   },
+  resolved: {
+    label: "Resolved",
+    dot: "bg-slate-500",
+    bg: "bg-slate-100",
+    text: "text-slate-700",
+    ring: "ring-slate-200/70",
+    Icon: CheckCircle2,
+  },
   refunded: {
     label: "Refunded",
     dot: "bg-slate-500",
@@ -75,6 +91,14 @@ const styles: Record<EscrowStatus, StyleSpec> = {
     text: "text-slate-700",
     ring: "ring-slate-200/70",
     Icon: Undo2,
+  },
+  expired: {
+    label: "Expired",
+    dot: "bg-slate-400",
+    bg: "bg-slate-100",
+    text: "text-slate-600",
+    ring: "ring-slate-200/70",
+    Icon: Clock,
   },
 };
 

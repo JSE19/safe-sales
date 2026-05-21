@@ -9,10 +9,8 @@ import {
   Package,
   Receipt,
   Wallet,
-  Star,
   Bell,
   Search,
-  Link2,
   Scale,
 } from "lucide-react";
 import { useToast } from "@/hooks/useToast";
@@ -24,13 +22,13 @@ interface Props {
   action?: React.ReactNode;
 }
 
-// Mobile bottom-nav: 5 most-used.
+// Mobile bottom-nav: 5 most-used (MVP per PRD §51-89).
 const mobileTabs = [
   { to: "/app", icon: Home, label: "Home", end: true },
   { to: "/app/listings", icon: Package, label: "Listings" },
   { to: "/app/orders", icon: Receipt, label: "Orders" },
   { to: "/app/earnings", icon: Wallet, label: "Earnings" },
-  { to: "/app/reputation", icon: Star, label: "Profile" },
+  { to: "/app/dispute", icon: Scale, label: "Disputes" },
 ];
 
 function buildSidebarGroups() {
@@ -47,13 +45,6 @@ function buildSidebarGroups() {
         { to: "/app/listings", icon: Package, label: "Listings", end: false, badge: undefined },
         { to: "/app/orders", icon: Receipt, label: "Orders", end: false, badge: undefined },
         { to: "/app/earnings", icon: Wallet, label: "Earnings", end: false, badge: undefined },
-      ],
-    },
-    {
-      label: "Grow",
-      items: [
-        { to: "/app/payment-requests", icon: Link2, label: "Payment requests", end: false, badge: undefined },
-        { to: "/app/reputation", icon: Star, label: "Reputation & shop", end: false, badge: undefined },
       ],
     },
     {
@@ -136,16 +127,13 @@ export function AppShell({ children, title, subtitle, action }: Props) {
           ))}
         </nav>
         <div className="border-t border-border p-3">
-          <Link
-            to={`/${currentSeller.handle}`}
-            className="flex items-center gap-3 rounded-lg p-2 hover:bg-secondary"
-          >
+          <div className="flex items-center gap-3 rounded-lg p-2">
             <Avatar seed={currentSeller.avatarSeed} name={currentSeller.name} size={36} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-ink">{currentSeller.name}</p>
               <p className="truncate text-xs text-ink-soft">@{currentSeller.handle}</p>
             </div>
-          </Link>
+          </div>
         </div>
       </aside>
 

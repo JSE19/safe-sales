@@ -24,7 +24,6 @@ import { formatDate, formatNGN, formatTime } from "@/lib/format";
 import {
   ShieldCheck,
   Truck,
-  MessageCircle,
   CheckCircle2,
   Scale,
   ChevronLeft,
@@ -149,11 +148,6 @@ export default function BuyerOrder() {
                   <span>{seller.rating.toFixed(1)} · {seller.reviews} reviews</span>
                 </div>
               </div>
-              <Button asChild variant="outline" size="sm" className="h-8">
-                <Link to="/app/chat">
-                  <MessageCircle className="mr-1 h-3.5 w-3.5" /> Message
-                </Link>
-              </Button>
             </div>
           </section>
 
