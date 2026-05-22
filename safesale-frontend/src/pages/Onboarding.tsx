@@ -30,7 +30,7 @@
 import { useSeoMeta } from "@unhead/react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { generateSecretKey, nip19 } from "nostr-tools";
+import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { Check, Eye, EyeOff, Loader2, Lock, X } from "lucide-react";
 
 import { Logo } from "@/components/safesale/Logo";
@@ -45,12 +45,30 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useCurrentSeller } from "@/hooks/useCurrentSeller";
 import { useLoginActions } from "@/hooks/useLoginActions";
 import { useToast } from "@/hooks/useToast";
+import { apiClient } from "@/lib/api";
+import { ApiError } from "@/lib/api/errors";
 import { cn } from "@/lib/utils";
 
 const HANDLE_MIN = 3;
 const SHOP_NAME_MIN = 2;
+/** Backend `CreateSellerSchema` requires `phone.min(7)`. */
+const PHONE_MIN = 7;
+/**
+ * Backend-required fields not collected in the 30-second signup. The
+ * seller is prompted to fill these in from Settings before their first
+ * sale ships; until then they're stored as friendly placeholders that
+ * pass the backend's Zod schema without polluting the DB with garbage.
+ *
+ * - `location`: must be 2+ chars. "Nigeria" is a defensible default for the
+ *   MVP market and reads sensibly if it surfaces in any UI.
+ * - `category`: same constraint. "General" is the catch-all the backend
+ *   would otherwise treat as missing.
+ */
+const DEFAULT_LOCATION = "Nigeria";
+const DEFAULT_CATEGORY = "General";
 
 export default function Onboarding() {
   useSeoMeta({ title: "Open your shop — SafeSale" });
@@ -110,15 +128,18 @@ function OnboardingCard() {
 function OpenShopForm() {
   const [handle, setHandle] = useState("");
   const [shopName, setShopName] = useState("");
+  const [phone, setPhone] = useState("");
   const [isCreating, setIsCreating] = useState(false);
 
   const loginActions = useLoginActions();
+  const [, setCurrentSeller] = useCurrentSeller();
   const navigate = useNavigate();
   const { toast } = useToast();
 
   const handleValid = isHandleValid(handle);
   const shopNameValid = shopName.trim().length >= SHOP_NAME_MIN;
-  const canSubmit = handleValid && shopNameValid && !isCreating;
+  const phoneValid = isPhoneValid(phone);
+  const canSubmit = handleValid && shopNameValid && phoneValid && !isCreating;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -126,22 +147,44 @@ function OpenShopForm() {
     try {
       const sk = generateSecretKey();
       const nsec = nip19.nsecEncode(sk);
-      // Store the freshly-generated key in the app's login session.
-      // The nsec persists in localStorage via @nostrify/react/login.
+      const npub = nip19.npubEncode(getPublicKey(sk));
+
+      // Register with the backend FIRST. If the handle is taken or any
+      // other validation fails, we want to surface that before logging
+      // the user into a key they can't actually use as a seller.
+      const { seller } = await apiClient.createSeller({
+        npub,
+        handle: handle.trim().toLowerCase(),
+        name: shopName.trim(),
+        phone: phone.trim(),
+        location: DEFAULT_LOCATION,
+        category: DEFAULT_CATEGORY,
+      });
+
+      // Now persist the login + seller record together. The nsec ends
+      // up in localStorage via Nostrify's `addLogin` action.
       loginActions.nsec(nsec);
+      setCurrentSeller({
+        id: seller.id,
+        npub: seller.npub,
+        handle: seller.handle,
+        name: seller.name,
+        createdAt: seller.createdAt,
+      });
+
       // TODO: publish kind 0 profile metadata { name: shopName, ... } and
       // persist the handle as a NIP-05-style identifier once the backend
       // handle registry is live.
       toast({
         title: "Shop created",
-        description: `Welcome, @${handle.trim()}.`,
+        description: `Welcome, @${seller.handle}.`,
       });
       navigate("/app");
     } catch (err) {
       setIsCreating(false);
       toast({
         title: "Couldn't create your shop",
-        description: err instanceof Error ? err.message : "Please try again.",
+        description: friendlySellerError(err),
         variant: "destructive",
       });
     }
@@ -157,6 +200,8 @@ function OpenShopForm() {
       />
 
       <ShopNameField value={shopName} onChange={setShopName} />
+
+      <PhoneField value={phone} onChange={setPhone} />
 
       <Disclosure>
         We'll generate a Nostr key and store it securely in this browser.
@@ -212,9 +257,18 @@ function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
 
   const [handle, setHandle] = useState("");
   const [shopName, setShopName] = useState("");
+  const [phone, setPhone] = useState("");
   const [opening, setOpening] = useState(false);
 
+  /**
+   * Captured at sign-in so we can register the seller on the backend
+   * AFTER they pick a handle, without re-decoding the nsec a second
+   * time. Cleared on reset alongside everything else.
+   */
+  const [signedInNpub, setSignedInNpub] = useState<string | null>(null);
+
   const loginActions = useLoginActions();
+  const [, setCurrentSeller] = useCurrentSeller();
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -226,7 +280,9 @@ function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
     setError(null);
     setHandle("");
     setShopName("");
+    setPhone("");
     setOpening(false);
+    setSignedInNpub(null);
   };
 
   const onChange = (next: boolean) => {
@@ -250,7 +306,12 @@ function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
       if (decoded.type !== "nsec") {
         throw new Error("That key isn't a private key (nsec).");
       }
+      // Derive the npub up-front so we can hand it to createSeller in
+      // the next stage without storing the raw secret in React state.
+      const npub = nip19.npubEncode(getPublicKey(decoded.data));
+
       loginActions.nsec(trimmed);
+      setSignedInNpub(npub);
       setStage("details");
       // Clear the raw key from React state once the login action has
       // taken it — minimises the window it's in memory.
@@ -267,14 +328,42 @@ function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
   };
 
   const handleOpenShop = async () => {
-    if (!isHandleValid(handle) || shopName.trim().length < SHOP_NAME_MIN) return;
+    if (
+      !isHandleValid(handle) ||
+      shopName.trim().length < SHOP_NAME_MIN ||
+      !isPhoneValid(phone) ||
+      !signedInNpub
+    ) {
+      return;
+    }
     setOpening(true);
     try {
+      const { seller } = await apiClient.createSeller({
+        npub: signedInNpub,
+        handle: handle.trim().toLowerCase(),
+        name: shopName.trim(),
+        phone: phone.trim(),
+        location: DEFAULT_LOCATION,
+        category: DEFAULT_CATEGORY,
+      });
+      setCurrentSeller({
+        id: seller.id,
+        npub: seller.npub,
+        handle: seller.handle,
+        name: seller.name,
+        createdAt: seller.createdAt,
+      });
       // TODO: publish kind 0 profile metadata under the connected key.
-      toast({ title: "Welcome back", description: `Signed in as @${handle.trim()}.` });
+      toast({ title: "Welcome back", description: `Signed in as @${seller.handle}.` });
       onOpenChange(false);
       reset();
       navigate("/app");
+    } catch (err) {
+      toast({
+        title: "Couldn't open your shop",
+        description: friendlySellerError(err),
+        variant: "destructive",
+      });
     } finally {
       setOpening(false);
     }
@@ -402,6 +491,8 @@ function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
 
             <ShopNameField value={shopName} onChange={setShopName} />
 
+            <PhoneField value={phone} onChange={setPhone} />
+
             <DialogFooter className="gap-2 sm:gap-2">
               <Button
                 variant="outline"
@@ -415,6 +506,7 @@ function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
                 disabled={
                   !isHandleValid(handle) ||
                   shopName.trim().length < SHOP_NAME_MIN ||
+                  !isPhoneValid(phone) ||
                   opening
                 }
                 className="bg-brand text-brand-foreground hover:bg-brand/90"
@@ -484,7 +576,10 @@ function HandleField({
           spellCheck={false}
           value={value}
           onChange={(e) =>
-            onChange(e.target.value.replace(/[^a-z0-9_]/gi, "").toLowerCase())
+            // Allow the same alphabet the backend accepts: lowercase
+            // alnum + `.`, `-`, `_`. The validator still gates the
+            // start/end-with-alnum rule.
+            onChange(e.target.value.replace(/[^a-z0-9._-]/gi, "").toLowerCase())
           }
           placeholder="yourshop"
           className="pl-7 pr-10"
@@ -526,6 +621,33 @@ function ShopNameField({
         onChange={(e) => onChange(e.target.value)}
         placeholder="e.g. Amaka's Boutique"
       />
+    </div>
+  );
+}
+
+function PhoneField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <div>
+      <Label htmlFor="shop-phone">Phone number</Label>
+      <Input
+        id="shop-phone"
+        type="tel"
+        autoComplete="tel"
+        className="mt-1.5"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="+234 800 000 0000"
+        inputMode="tel"
+      />
+      <p className="mt-1.5 text-[11px] text-ink-soft">
+        Buyers see this on the order page so they can reach you about delivery.
+      </p>
     </div>
   );
 }
@@ -580,5 +702,45 @@ function NostrInfoFooter() {
 
 function isHandleValid(handle: string): boolean {
   const cleaned = handle.trim();
-  return cleaned.length >= HANDLE_MIN && /^[a-z0-9_]+$/.test(cleaned);
+  // Mirror the backend's Zod regex: lowercase alnum + dot/dash/underscore,
+  // must start and end with alnum, 3–24 chars. The frontend Input filter
+  // already strips uppercase + symbols other than `_`, but a stricter
+  // gate here keeps backend validation errors out of the happy path.
+  return (
+    cleaned.length >= HANDLE_MIN &&
+    cleaned.length <= 24 &&
+    /^[a-z0-9][a-z0-9._-]*[a-z0-9]$/.test(cleaned)
+  );
+}
+
+/**
+ * Match the backend's Zod constraint `phone.min(7).max(20)` while
+ * forgiving common formatting characters (spaces, dashes, parens, +).
+ * We don't normalize — the backend stores whatever the user types so
+ * buyers see it the way the seller wrote it.
+ */
+function isPhoneValid(phone: string): boolean {
+  const cleaned = phone.trim();
+  // Strip formatting to count digits but leave the leading + intact.
+  const digits = cleaned.replace(/[^\d]/g, "");
+  return cleaned.length >= PHONE_MIN && cleaned.length <= 20 && digits.length >= 7;
+}
+
+/**
+ * Convert the backend / network error into something a seller can
+ * actually act on. Special-cases the most common failures:
+ *
+ *   - 409 Conflict on a duplicate handle → "Handle is taken"
+ *   - BACKEND_UNREACHABLE → network framing instead of stack trace
+ */
+function friendlySellerError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.code === "BACKEND_UNREACHABLE") {
+      return "We couldn't reach SafeSale right now. Check your connection and try again.";
+    }
+    // The backend throws Conflict with messages like
+    // `Handle "@amaka" is already taken` — surface verbatim, it's user-friendly.
+    return err.message;
+  }
+  return err instanceof Error ? err.message : "Please try again.";
 }
