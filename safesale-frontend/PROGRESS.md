@@ -34,7 +34,7 @@ Legend: ✅ done (designed + wired to live backend) · 🟡 in-progress · ⏭ n
 | 4 | Seller Orders (list + detail) | `/app/orders` & `/app/orders/:token` | Seller | 🟡 | Detail page (`src/pages/app/OrderDetailPage.tsx`) fully wired: `apiClient.getOrder` (8s poll) + Mark Shipped → `apiClient.shipOrder`. **OrdersPage list view still reads `lib/mock.ts` — needs to switch to `useSellerOrders`.** Both need Stitch prompts + design pass. |
 | 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | React component exists but is a mock-fed stub. Backend has no /api/earnings endpoint yet; this screen is blocked on a Phase 8+ backend wire. |
 | 6 | Public Listing | `/buy/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/06-public-listing.html` → React in `src/pages/PublicListing.tsx`; wired to `useListing` (Nostr kind 30018 → fixture fallback for cold demos). |
-| 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/03-checkout.html` → React in `src/pages/Checkout.tsx`; wired to `apiClient.createOrder` + polling. |
+| 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/07-buyer-checkout.html` → React in `src/pages/Checkout.tsx`; wired to `apiClient.createOrder` + polling. |
 | 8 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ✅ | Stitch HTML in `.stitch-designs/08-buyer-order.html` → React in `src/pages/BuyerOrder.tsx`; wired to `apiClient.getOrder` (8s poll), `apiClient.releaseOrder` (signs with nsec from localStorage), `apiClient.openDispute`. 7-state hero, 4-step timeline, mobile sticky action bar. |
 | 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | Not designed, not wired. Blocked on backend kind 33889 mediator publishing being live. |
 
@@ -103,9 +103,8 @@ Raw HTML from Stitch is committed to `.stitch-designs/` so we never lose a desig
 | 1 — Seller Onboarding | _(prompt not archived; predates convention)_ | `.stitch-designs/01-onboarding.html` |
 | 2 — Seller Dashboard Home | `.stitch-designs/02-seller-dashboard.prompt.md` | `.stitch-designs/02-seller-dashboard.html` |
 | 6 — Public Listing | `.stitch-designs/06-public-listing.prompt.md` | `.stitch-designs/06-public-listing.html` |
-| 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/03-checkout.html` (numbered from old ordering; safe to rename when next file lands) |
-| 8 — Buyer Order Page | `.stitch-designs/08-buyer-order.prompt.md` | `.stitch-designs/08-buyer-order.html` |
-| 3 — Seller Listings | _(awaiting prompt)_ | _(awaiting Stitch)_ |
+| 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/07-buyer-checkout.html` (renamed from `03-checkout.html` once canonical numbering stabilised) |
+| 3 — Seller Listings | `.stitch-designs/03-seller-listings.prompt.md` | _(awaiting Stitch)_ |
 | 4 — Seller Orders (list + detail) | _(awaiting prompt)_ | _(awaiting Stitch)_ |
 | 5 — Seller Earnings | _(awaiting prompt)_ | _(awaiting Stitch)_ |
 | 9 — Admin Dispute Dashboard | _(awaiting prompt)_ | _(awaiting Stitch)_ |
