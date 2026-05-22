@@ -31,7 +31,6 @@ import {
   MapPin,
   Phone,
   Bookmark,
-  Mail,
   Truck,
 } from "lucide-react";
 import {
@@ -334,17 +333,15 @@ export default function Checkout() {
     if (!createdOrder) return;
     setStep("waiting");
 
-    // Surface the "we sent your order link" notification the same way
-    // the backend would (Termii SMS / Resend email per BACKEND.md). In
-    // mock mode there's no real backend so the toast is the demo
-    // surrogate — judges see the story is intact.
-    const buyerContact = contactMethod === "email" ? email : phone;
+    // Honest demo toast — the email/SMS provider integration is owned
+    // by the backend (Termii for SMS, Resend for email per BACKEND.md)
+    // and isn't wired yet. The order link IS shown on the Secured
+    // screen with copy + bookmark + screenshot prompts, which the PRD
+    // explicitly calls the primary delivery path. The toast just
+    // confirms the user's action landed.
     toast({
-      title:
-        contactMethod === "email"
-          ? "Order link sent to your email"
-          : "Order link sent via SMS",
-      description: buyerContact,
+      title: "Looking for your transfer…",
+      description: "Save your order link on the next screen — it's how you'll come back to this order.",
     });
   };
 
@@ -928,9 +925,11 @@ function Secured({
         />
       </div>
 
-      {/* SAVE YOUR LINK — the critical bit. Without this URL the buyer has
-          no way back to their escrow. Spec calls for prominent bookmark
-          instruction + email/SMS delivery. */}
+      {/* SAVE YOUR LINK — the critical bit. Without this URL the buyer
+          has no way back to their escrow. Per PRD, the link is
+          *displayed on screen with a clear instruction to bookmark or
+          screenshot it*; email/SMS delivery is a future backend job
+          (Termii + Resend), not promised here until it's actually wired. */}
       <div className="rounded-2xl border border-amber-200/70 bg-amber-50/60 p-5">
         <div className="flex items-start gap-3">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
@@ -938,20 +937,18 @@ function Secured({
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-ink">
-              Save your order link
+              Save your order link now
             </p>
             <p className="mt-1 text-xs leading-relaxed text-ink-soft">
               This is your only way back to this order — you don't have an
-              account. We've also sent it to your{" "}
-              <span className="font-medium text-ink">
-                {contactMethod === "email" ? "email" : "phone via SMS"}
-              </span>
+              account. <span className="font-medium text-ink">Bookmark it, screenshot it, or copy it to your{" "}
+              {contactMethod === "email" ? "email drafts" : "WhatsApp chat"}</span>
               {contactValue && (
                 <>
-                  {" "}(<span className="font-medium text-ink">{contactValue}</span>)
+                  {" "}({contactValue})
                 </>
-              )}
-              .
+              )}{" "}
+              before leaving this page.
             </p>
           </div>
         </div>
@@ -973,7 +970,7 @@ function Secured({
         </div>
 
         <div className="mt-3 grid grid-cols-3 gap-2">
-          <SaveAction icon={Mail} label={`${contactMethod === "email" ? "Email" : "SMS"} sent`} done />
+          <SaveAction icon={Copy} label="Copy the link" />
           <SaveAction icon={Bookmark} label="Bookmark this page" />
           <SaveAction icon={ImageDown} label="Screenshot it" />
         </div>
