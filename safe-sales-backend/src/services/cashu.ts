@@ -68,9 +68,10 @@ export async function verifyMintCapabilities(): Promise<void> {
 /**
  * Build a CashuWallet for the configured mint, using a sat keyset.
  *
- * cashu-ts v2 has an issue where `wallet.loadMint()` can throw on mints
- * with the longer keyset-ID format (testnut). We work around it by
- * pre-fetching keysets + keys ourselves and passing them in.
+ * We pre-fetch keysets + keys ourselves and pass them into the wallet
+ * constructor. cashu-ts's own loadMint() has a keyset-ID verification
+ * check that rejects the longer (65-char) keyset ID format that
+ * testnut.cashu.space uses — bypassed by explicit injection.
  *
  * Keysets and keys are cached for the lifetime of the process; mints
  * rarely rotate keys mid-session.
@@ -93,6 +94,10 @@ async function buildWallet(): Promise<CashuWallet> {
     _cachedKeysets = satKeysets;
     _cachedKeys = keys;
     _activeKeysetId = active.id;
+    logger.info(
+      { keysetId: active.id, satKeysetCount: satKeysets.length },
+      'Cashu keysets cached',
+    );
   }
 
   const wallet = new CashuWallet(mint, {
