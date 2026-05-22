@@ -1,68 +1,151 @@
 /**
- * Seller Dashboard Home — `/app`
+ * Seller Dashboard Home — `/app`.
  *
- * The first thing a seller sees after signing up. Two states:
+ * The seller's command surface. Per the Stitch prompt
+ * (.stitch-designs/02-seller-dashboard.prompt.md) the page must, in
+ * order:
  *
- *   1. **Empty (default for new sellers)** — welcome banner, three big
- *      action cards (Create listing / Copy shop link / Preview shop),
- *      a "How SafeSale works" strip, and a zero-state stats row.
+ *   1. Tell them at a glance how their business is doing today.
+ *   2. Surface anything that needs them — a single prioritised list.
+ *   3. Get them to the next action in one tap.
  *
- *   2. **Demo (toggle on)** — populated dashboard showing a 7-day
- *      revenue chart, filled stats, and a recent-orders feed. Useful
- *      for demos and for sellers who want to see what a full dashboard
- *      will look like before they make their first sale.
+ * Sections (top-to-bottom):
  *
- * Design ported from a Stitch prototype; reworked to use SafeSale's
- * existing green/ink palette, lucide-react icons, and shadcn primitives.
+ *   - Welcome banner with the prioritised one-liner + "New listing" /
+ *     "Copy shop link" actions.
+ *   - 4 KPI tiles: locked in escrow, paid out (7d), orders to ship,
+ *     active listings. All read off `useSellerOrders()` +
+ *     `useMyListings()`.
+ *   - "Needs your attention" — prioritised order rows. Currently the
+ *     two types we surface are `payment_locked` (needs shipping) and
+ *     `disputed` (needs response). Each row routes to
+ *     `/app/orders/<orderToken>`.
+ *   - Recent orders (5) and listings preview (4) two-up.
+ *   - Reputation strip — placeholder for the kind 1985 review feed
+ *     until that's wired.
  *
- * Identity: still pulls the seller's display data from the mock
- * `currentSeller` for now. A follow-up PR will switch the whole app
- * to `useCurrentUser` + `useAuthor` once the buyer/seller pubkey
- * plumbing is wired.
+ * Empty states matter: a freshly-signed-up seller sees friendly nudges
+ * instead of zeros, and the "Needs your attention" card hides itself
+ * entirely when there's nothing to do.
+ *
+ * Layout + visual direction adapted from the Stitch HTML at
+ * `.stitch-designs/02-seller-dashboard.html`. The Stitch output used
+ * Material Symbols, glassmorphism, a violet primary, an FAB, and its
+ * own sidebar — all explicitly forbidden by the design contract in
+ * AGENTS.md. We keep the structural layout and discard those bits in
+ * favour of the existing AppShell + SafeSale tokens + lucide icons.
  */
 
 import { useSeoMeta } from "@unhead/react";
-import { useState } from "react";
+import { useMemo } from "react";
 import { Link } from "react-router-dom";
 
 import {
-  ArrowUpRight,
-  Check,
-  CheckCircle2,
-  ChevronRight,
+  AlertCircle,
   Copy,
-  Eye,
-  Link2 as LinkIcon,
   Lock,
+  PackageCheck,
   Plus,
-  TrendingUp,
+  Sparkles,
+  Star,
+  Tag,
   Truck,
-  X,
+  Wallet,
 } from "lucide-react";
 
 import { AppShell } from "@/components/safesale/AppShell";
 import { Avatar } from "@/components/safesale/Avatar";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useCurrentSeller } from "@/hooks/useCurrentSeller";
+import { useMyListings, type MyListing } from "@/hooks/useMyListings";
+import { useSellerOrders } from "@/hooks/useSellerOrders";
 import { useToast } from "@/hooks/useToast";
-import { currentSeller, orders } from "@/lib/mock";
-import { formatNGN, formatSats } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import type { ApiOrderStatus, SellerOrderRow } from "@/lib/api";
+import { formatNGN, formatRelative } from "@/lib/format";
+import { cn, sanitizeUrl } from "@/lib/utils";
+
+/* -------------------------------------------------------------------------- */
+/*                                Constants                                    */
+/* -------------------------------------------------------------------------- */
+
+/** Order statuses counted as "money still in escrow on this seller's behalf". */
+const LOCKED_STATUSES: ReadonlySet<ApiOrderStatus> = new Set<ApiOrderStatus>([
+  "payment_locked",
+  "shipped",
+  "delivered",
+  "disputed",
+]);
+
+/** Statuses that show up in "Needs your attention" — the seller can act. */
+const ACTION_STATUSES: ReadonlySet<ApiOrderStatus> = new Set<ApiOrderStatus>([
+  "payment_locked",
+  "disputed",
+]);
+
+/** 7-day window for "paid out this week". */
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/* -------------------------------------------------------------------------- */
+/*                                Page                                        */
+/* -------------------------------------------------------------------------- */
 
 export default function DashboardHome() {
   useSeoMeta({ title: "Home — SafeSale" });
 
-  const [demoMode, setDemoMode] = useState(false);
+  const [seller] = useCurrentSeller();
+  const { orders, isLoading: ordersLoading } = useSellerOrders();
+  const { data: listings = [], isLoading: listingsLoading } = useMyListings();
 
-  // TODO: replace with useCurrentUser() + useAuthor() so seller's name
-  // and handle come from their kind 0 profile event.
-  const seller = currentSeller;
-  const firstName = seller.name.split(" ")[0];
-  const shopUrl = `safesale.app/@${seller.handle}`;
+  // Derived KPIs + lists. All memoised because they walk the orders array.
+  const stats = useMemo(() => deriveStats(orders), [orders]);
+  const actionRows = useMemo(
+    () =>
+      orders
+        .filter((o) => ACTION_STATUSES.has(o.status))
+        .sort(
+          (a, b) =>
+            // Oldest unhandled first — the seller should act on the row
+            // that's been waiting the longest.
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        )
+        .slice(0, 5),
+    [orders],
+  );
+  const recentRows = useMemo(() => orders.slice(0, 5), [orders]);
 
-  const action = (
-    <div className="flex items-center justify-between gap-3">
-      <DemoToggle value={demoMode} onChange={setDemoMode} />
+  const firstName = (seller?.name ?? "").split(" ")[0] || "there";
+  const shopUrl = seller?.handle ? `safesale.app/${seller.handle}` : null;
+
+  const { toast } = useToast();
+  const copyShopUrl = () => {
+    if (!shopUrl) {
+      toast({
+        title: "Set up your shop first",
+        description:
+          "Finish onboarding so we can give you a shareable shop link.",
+      });
+      return;
+    }
+    void navigator.clipboard?.writeText(`https://${shopUrl}`).then(() => {
+      toast({ title: "Shop link copied" });
+    });
+  };
+
+  // Action slot in the AppShell header — primary CTA + copy link.
+  const headerAction = (
+    <div className="flex items-center gap-2">
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={copyShopUrl}
+        className="h-9"
+      >
+        <Copy className="mr-1 h-4 w-4" />
+        <span className="hidden sm:inline">Copy shop link</span>
+        <span className="sm:hidden">Copy link</span>
+      </Button>
       <Button
         asChild
         size="sm"
@@ -77,472 +160,616 @@ export default function DashboardHome() {
   );
 
   return (
-    <AppShell title="Home" subtitle="Overview and quick actions." action={action}>
-      {demoMode ? (
-        <DemoDashboard seller={seller} />
-      ) : (
-        <EmptyDashboard
+    <AppShell title="Home" subtitle={shopUrl ?? undefined} action={headerAction}>
+      <div className="space-y-6">
+        <WelcomeBanner
           firstName={firstName}
-          shopUrl={shopUrl}
+          loading={ordersLoading}
+          actionRows={actionRows}
         />
-      )}
+
+        <KpiGrid
+          stats={stats}
+          activeListings={listings.length}
+          loading={ordersLoading || listingsLoading}
+        />
+
+        <NeedsAttentionCard rows={actionRows} loading={ordersLoading} />
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          <RecentOrdersCard rows={recentRows} loading={ordersLoading} />
+          <ListingsPreviewCard
+            listings={listings}
+            loading={listingsLoading}
+          />
+        </div>
+
+        <ReputationStrip />
+      </div>
     </AppShell>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/*                              Empty state                                   */
+/*                             Welcome banner                                 */
 /* -------------------------------------------------------------------------- */
 
-function EmptyDashboard({
+function WelcomeBanner({
   firstName,
-  shopUrl,
+  loading,
+  actionRows,
 }: {
   firstName: string;
-  shopUrl: string;
+  loading: boolean;
+  actionRows: SellerOrderRow[];
 }) {
-  const [welcomeOpen, setWelcomeOpen] = useState(true);
-  const [howOpen, setHowOpen] = useState(true);
-  const { toast } = useToast();
+  const greeting = useMemo(() => timeOfDayGreeting(), []);
 
-  const copyShopUrl = () => {
-    navigator.clipboard?.writeText(`https://${shopUrl}`).then(() => {
-      toast({ title: "Shop link copied" });
-    });
+  const subline = (() => {
+    if (loading) return "Catching up on your shop…";
+    const needsShip = actionRows.filter(
+      (r) => r.status === "payment_locked",
+    ).length;
+    const oldestShip = actionRows.find(
+      (r) => r.status === "payment_locked",
+    );
+    if (needsShip > 0 && oldestShip) {
+      const word = needsShip === 1 ? "order" : "orders";
+      return (
+        <>
+          You have{" "}
+          <strong className="font-semibold text-ink">
+            {needsShip} {word} waiting to ship
+          </strong>
+          . The oldest is from {formatRelative(oldestShip.createdAt)}.
+        </>
+      );
+    }
+    if (actionRows.length > 0) {
+      return "You have items that need a response.";
+    }
+    return "You're all caught up. Time to share your shop link?";
+  })();
+
+  return (
+    <section className="rounded-2xl border border-border bg-white p-5 sm:p-6">
+      <p className="text-sm text-ink-soft">{greeting},</p>
+      <h2 className="mt-1 text-2xl font-semibold leading-tight text-ink sm:text-3xl">
+        {firstName} <span aria-hidden>👋</span>
+      </h2>
+      <p className="mt-2 max-w-prose text-sm text-ink-soft">{subline}</p>
+    </section>
+  );
+}
+
+function timeOfDayGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                  KPI grid                                  */
+/* -------------------------------------------------------------------------- */
+
+interface DerivedStats {
+  lockedNGN: number;
+  lockedCount: number;
+  paidThisWeekNGN: number;
+  ordersToShip: number;
+  oldestShipAgo: string | null;
+}
+
+function deriveStats(orders: SellerOrderRow[]): DerivedStats {
+  let lockedNGN = 0;
+  let lockedCount = 0;
+  let paidThisWeekNGN = 0;
+  let ordersToShip = 0;
+  let oldestShipAt: number | null = null;
+
+  const cutoff = Date.now() - WEEK_MS;
+  for (const o of orders) {
+    if (LOCKED_STATUSES.has(o.status)) {
+      lockedNGN += o.amountNGN;
+      lockedCount += 1;
+    }
+    if (o.status === "completed") {
+      const releasedTs = o.releasedAt
+        ? new Date(o.releasedAt).getTime()
+        : new Date(o.updatedAt).getTime();
+      if (releasedTs >= cutoff) {
+        paidThisWeekNGN += o.amountNGN;
+      }
+    }
+    if (o.status === "payment_locked") {
+      ordersToShip += 1;
+      const ts = new Date(o.createdAt).getTime();
+      if (oldestShipAt === null || ts < oldestShipAt) oldestShipAt = ts;
+    }
+  }
+
+  return {
+    lockedNGN,
+    lockedCount,
+    paidThisWeekNGN,
+    ordersToShip,
+    oldestShipAgo:
+      oldestShipAt !== null
+        ? formatRelative(new Date(oldestShipAt).toISOString())
+        : null,
   };
-
-  return (
-    <div className="space-y-8">
-      {welcomeOpen && (
-        <div className="relative flex items-start justify-between gap-4 rounded-2xl border border-brand/20 bg-brand/5 p-5">
-          <div>
-            <h3 className="flex items-center gap-2 text-base font-semibold text-ink">
-              Welcome, {firstName}
-              <span aria-hidden className="text-xl">👋</span>
-            </h3>
-            <p className="mt-1 text-sm text-ink-soft">
-              Let's get your first sale. Set up your shop in minutes.
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label="Dismiss welcome banner"
-            onClick={() => setWelcomeOpen(false)}
-            className="text-ink-soft transition-colors hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
-      {/* 3-card action grid */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <ActionCard
-          emphasized
-          icon={Plus}
-          title="Create your first listing"
-          body="Add details, photos, and set your price in sats."
-          cta="Create listing"
-          to="/app/listings"
-        />
-
-        <CardShell>
-          <CardIcon icon={LinkIcon} />
-          <h4 className="text-base font-semibold text-ink">Copy your shop link</h4>
-          <p className="mt-1 flex-1 text-sm text-ink-soft">
-            Paste it in your Instagram bio, WhatsApp About, TikTok profile, X bio — anywhere you sell.
-          </p>
-          <div className="mt-4 flex items-center gap-2">
-            <div className="flex-1 truncate rounded-full bg-surface px-3 py-1.5 font-mono text-xs text-ink-soft">
-              {shopUrl}
-            </div>
-            <button
-              type="button"
-              onClick={copyShopUrl}
-              aria-label="Copy shop link"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-            >
-              <Copy className="h-4 w-4" />
-            </button>
-          </div>
-        </CardShell>
-
-        <CardShell>
-          <CardIcon icon={Eye} />
-          <h4 className="text-base font-semibold text-ink">Browse your listings</h4>
-          <p className="mt-1 flex-1 text-sm text-ink-soft">
-            Edit prices, photos and stock — or copy a shareable link.
-          </p>
-          <Button
-            asChild
-            variant="outline"
-            className="mt-4 w-full"
-          >
-            <Link to="/app/listings">
-              Open listings
-              <ArrowUpRight className="ml-1 h-4 w-4" />
-            </Link>
-          </Button>
-        </CardShell>
-      </div>
-
-      {/* How SafeSale works */}
-      <section className="rounded-2xl border border-border bg-white p-6">
-        <button
-          type="button"
-          className="flex w-full items-center justify-between text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
-          onClick={() => setHowOpen((v) => !v)}
-          aria-expanded={howOpen}
-        >
-          <h4 className="text-base font-semibold text-ink">
-            How SafeSale works for sellers
-          </h4>
-          <ChevronRight
-            className={cn(
-              "h-4 w-4 text-ink-soft transition-transform",
-              howOpen && "rotate-90",
-            )}
-          />
-        </button>
-
-        {howOpen && (
-          <div className="mt-5 grid gap-6 border-t border-border pt-5 md:grid-cols-3">
-            <HowStep
-              n={1}
-              icon={Lock}
-              label="Buyer pays into escrow"
-              body="Their sats are locked safely. They can't be touched without your delivery."
-            />
-            <HowStep
-              n={2}
-              icon={Truck}
-              label="You ship the order"
-              body="Mark it shipped with a tracking number once it's on the way."
-            />
-            <HowStep
-              n={3}
-              icon={CheckCircle2}
-              label="Get paid in sats"
-              body="Buyer confirms receipt → funds release instantly via Lightning."
-            />
-          </div>
-        )}
-      </section>
-
-      {/* Stats row (zero-state) */}
-      <section>
-        <h3 className="mb-4 text-base font-semibold text-ink">Overview</h3>
-        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
-          <ZeroStat label="Sats earned" hint="Start selling to see your first payout" />
-          <ZeroStat label="Orders" hint="No orders yet" />
-          <ZeroStat label="Reviews" hint="No reviews yet" />
-          <ZeroStat label="Buyers reached" hint="Share your shop link to grow" />
-        </div>
-        <p className="mt-4 text-center text-xs text-ink-soft">
-          Your stats will appear here once you make your first sale.
-        </p>
-      </section>
-    </div>
-  );
 }
 
-/* -------------------------------------------------------------------------- */
-/*                              Demo state                                    */
-/* -------------------------------------------------------------------------- */
-
-const DEMO_DAYS = [
-  { day: "Mon", sats: 4800 },
-  { day: "Tue", sats: 6200 },
-  { day: "Wed", sats: 3100 },
-  { day: "Thu", sats: 9700 },
-  { day: "Fri", sats: 12500 },
-  { day: "Sat", sats: 11200 },
-  { day: "Sun", sats: 8800 },
-];
-
-function DemoDashboard({ seller }: { seller: typeof currentSeller }) {
-  const recent = orders.slice(0, 4);
-  const maxBar = Math.max(...DEMO_DAYS.map((d) => d.sats));
-
-  return (
-    <div className="space-y-6">
-      {/* Filled stats */}
-      <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
-        <FilledStat
-          label="Sats earned"
-          value={formatSats(248_500)}
-          sub={`~${formatNGN(362_000)}`}
-          trend
-        />
-        <FilledStat label="Orders (30d)" value="12" />
-        <FilledStat label="Reviews" value="4.9 ★" sub="9 total" />
-        <FilledStat label="Unique buyers" value="14" />
-      </div>
-
-      {/* Chart + Recent orders */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        <section className="rounded-2xl border border-border bg-white p-6 lg:col-span-2">
-          <div className="mb-6 flex items-center justify-between">
-            <h3 className="text-base font-semibold text-ink">7-Day Revenue</h3>
-            <select
-              defaultValue="7d"
-              aria-label="Time range"
-              className="rounded-lg bg-surface px-2 py-1 text-xs font-medium text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-            >
-              <option value="7d">Last 7 days</option>
-              <option value="30d">Last 30 days</option>
-            </select>
-          </div>
-          <div className="grid h-44 grid-cols-7 items-end gap-3 pt-2">
-            {DEMO_DAYS.map((d) => {
-              const pct = (d.sats / maxBar) * 100;
-              return (
-                <div key={d.day} className="flex flex-col items-center gap-2">
-                  <div className="relative flex h-full w-full items-end">
-                    <div
-                      className="w-full rounded-md bg-gradient-to-t from-brand to-emerald-400 transition-all"
-                      style={{ height: `${pct}%` }}
-                    />
-                  </div>
-                  <span className="text-[10px] font-medium text-ink-soft">
-                    {d.day}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-border bg-white p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-base font-semibold text-ink">Recent orders</h3>
-            <Link
-              to="/app/orders"
-              className="text-xs font-medium text-brand hover:underline"
-            >
-              View all
-            </Link>
-          </div>
-          <ul className="divide-y divide-border">
-            {recent.map((o, i) => {
-              const initials = o.buyerName
-                .split(" ")
-                .slice(0, 2)
-                .map((s) => s[0])
-                .join("");
-              return (
-                <li key={o.id ?? i} className="flex items-center gap-3 py-3">
-                  <Avatar
-                    seed={o.id ?? `o-${i}`}
-                    name={o.buyerName}
-                    size={36}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium text-ink">
-                      {o.buyerName}
-                    </p>
-                    <p className="truncate text-xs text-ink-soft">
-                      {formatSats(o.amountSats ?? 12500)} ·{" "}
-                      {formatNGN(o.amountNGN ?? 18200)}
-                    </p>
-                  </div>
-                  <DemoBadge status={o.status} />
-                  <span className="sr-only">{initials}</span>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      </div>
-
-      <p className="text-center text-xs text-ink-soft">
-        Demo data — toggle off to see {seller.name.split(" ")[0]}'s real dashboard.
-      </p>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/*                              Reusable pieces                               */
-/* -------------------------------------------------------------------------- */
-
-function DemoToggle({
-  value,
-  onChange,
+function KpiGrid({
+  stats,
+  activeListings,
+  loading,
 }: {
-  value: boolean;
-  onChange: (next: boolean) => void;
+  stats: DerivedStats;
+  activeListings: number;
+  loading: boolean;
 }) {
   return (
-    <label className="flex items-center gap-2 text-xs font-medium text-ink-soft">
-      Demo data
-      <Switch
-        checked={value}
-        onCheckedChange={onChange}
-        aria-label="Toggle demo data"
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <KpiTile
+        icon={Lock}
+        label="Locked in escrow"
+        value={formatNGN(stats.lockedNGN)}
+        sub={
+          stats.lockedCount > 0
+            ? `Across ${stats.lockedCount} active order${stats.lockedCount === 1 ? "" : "s"}`
+            : "Nothing in escrow right now"
+        }
+        loading={loading}
       />
-    </label>
+      <KpiTile
+        icon={Wallet}
+        label="Paid out this week"
+        value={formatNGN(stats.paidThisWeekNGN)}
+        sub={
+          stats.paidThisWeekNGN > 0
+            ? "Last 7 days"
+            : "No releases yet this week"
+        }
+        loading={loading}
+      />
+      <KpiTile
+        icon={Truck}
+        label="Orders to ship"
+        value={String(stats.ordersToShip)}
+        sub={
+          stats.ordersToShip > 0
+            ? stats.oldestShipAgo
+              ? `Oldest ${stats.oldestShipAgo}`
+              : "Get them out today"
+            : "All caught up 🎉"
+        }
+        emphasizeSub={stats.ordersToShip > 0}
+        loading={loading}
+      />
+      <KpiTile
+        icon={Tag}
+        label="Active listings"
+        value={String(activeListings)}
+        sub={
+          <Link
+            to="/app/listings"
+            className="text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+          >
+            View all →
+          </Link>
+        }
+        loading={loading}
+      />
+    </div>
   );
 }
 
-function ActionCard({
+function KpiTile({
   icon: Icon,
-  title,
-  body,
-  cta,
-  to,
-  emphasized,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  body: string;
-  cta: string;
-  to: string;
-  emphasized?: boolean;
-}) {
-  return (
-    <Link
-      to={to}
-      className={cn(
-        "group flex h-full flex-col rounded-2xl border bg-white p-6 transition-all hover:shadow-[0_8px_20px_-14px_rgba(15,42,30,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
-        emphasized
-          ? "border-brand/40 ring-1 ring-brand/10 hover:border-brand"
-          : "border-border hover:border-ink/20",
-      )}
-    >
-      <CardIcon icon={Icon} emphasized={emphasized} />
-      <h4 className="text-base font-semibold text-ink">{title}</h4>
-      <p className="mt-1 flex-1 text-sm text-ink-soft">{body}</p>
-      <span
-        className={cn(
-          "mt-4 inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-          emphasized
-            ? "bg-brand text-brand-foreground group-hover:bg-brand/90"
-            : "bg-surface text-ink group-hover:bg-surface/70",
-        )}
-      >
-        {cta}
-        <ChevronRight className="ml-1 h-4 w-4" />
-      </span>
-    </Link>
-  );
-}
-
-function CardShell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex h-full flex-col rounded-2xl border border-border bg-white p-6 transition-all hover:shadow-[0_8px_20px_-14px_rgba(15,42,30,0.18)]">
-      {children}
-    </div>
-  );
-}
-
-function CardIcon({
-  icon: Icon,
-  emphasized,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  emphasized?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "mb-4 inline-flex h-12 w-12 items-center justify-center rounded-full",
-        emphasized ? "bg-brand/10 text-brand" : "bg-surface text-ink-soft",
-      )}
-    >
-      <Icon className="h-5 w-5" />
-    </div>
-  );
-}
-
-function HowStep({
-  n,
-  icon: Icon,
-  label,
-  body,
-}: {
-  n: number;
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  body: string;
-}) {
-  return (
-    <div className="flex flex-col items-center text-center">
-      <div className="mb-3 inline-flex h-10 w-10 items-center justify-center rounded-full bg-surface text-ink-soft">
-        <Icon className="h-4 w-4" />
-      </div>
-      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-ink">
-        {n}. {label}
-      </p>
-      <p className="text-xs text-ink-soft">{body}</p>
-    </div>
-  );
-}
-
-function ZeroStat({ label, hint }: { label: string; hint: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-white p-4">
-      <p className="mb-1 text-xs text-ink-soft">{label}</p>
-      <p className="text-2xl font-semibold text-ink tabular-nums">0</p>
-      <p className="mt-1 text-[11px] text-ink-soft">{hint}</p>
-    </div>
-  );
-}
-
-function FilledStat({
   label,
   value,
   sub,
-  trend,
+  loading,
+  emphasizeSub,
 }: {
+  icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: string;
-  sub?: string;
-  trend?: boolean;
+  sub: React.ReactNode;
+  loading?: boolean;
+  emphasizeSub?: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-white p-4">
-      <div className="mb-1 flex items-center justify-between text-xs text-ink-soft">
+    <div className="rounded-2xl border border-border bg-white p-5">
+      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+        <Icon className="h-4 w-4" />
         {label}
-        {trend && <TrendingUp className="h-3.5 w-3.5 text-brand" />}
       </div>
-      <p className="text-2xl font-semibold text-ink tabular-nums">{value}</p>
-      {sub && <p className="mt-1 text-[11px] text-ink-soft">{sub}</p>}
+      <div className="mt-3 text-3xl font-semibold leading-none text-ink tabular-nums">
+        {loading ? <Skeleton className="h-8 w-24" /> : value}
+      </div>
+      <div
+        className={cn(
+          "mt-2 text-xs",
+          emphasizeSub ? "text-amber-700" : "text-ink-soft",
+        )}
+      >
+        {loading ? <Skeleton className="h-3 w-32" /> : sub}
+      </div>
     </div>
   );
 }
 
-function DemoBadge({ status }: { status: string }) {
-  const map: Record<string, { bg: string; text: string; label: string }> = {
-    payment_locked: {
-      bg: "bg-amber-100",
-      text: "text-amber-800",
-      label: "Payment locked",
+/* -------------------------------------------------------------------------- */
+/*                          Needs your attention                              */
+/* -------------------------------------------------------------------------- */
+
+function NeedsAttentionCard({
+  rows,
+  loading,
+}: {
+  rows: SellerOrderRow[];
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <section className="rounded-2xl border border-border bg-white p-5">
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-48" />
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-border bg-white">
+      <header className="flex items-center justify-between px-5 py-4">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-ink">
+          {rows.length > 0 && (
+            <AlertCircle className="h-4 w-4 text-amber-600" />
+          )}
+          Needs your attention
+        </h3>
+        <Link
+          to="/app/orders"
+          className="text-xs font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+        >
+          View all orders →
+        </Link>
+      </header>
+
+      {rows.length === 0 ? (
+        <div className="px-6 py-10 text-center">
+          <Sparkles className="mx-auto h-5 w-5 text-brand" />
+          <p className="mt-3 text-sm font-medium text-ink">
+            You're all caught up
+          </p>
+          <p className="mt-1 text-xs text-ink-soft">
+            New orders will show up here as soon as buyers pay.
+          </p>
+        </div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {rows.map((row) => (
+            <AttentionRow key={row.orderToken} row={row} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function AttentionRow({ row }: { row: SellerOrderRow }) {
+  const isShip = row.status === "payment_locked";
+  const isDispute = row.status === "disputed";
+
+  return (
+    <li className="flex items-center gap-4 px-5 py-4">
+      <Avatar seed={row.buyerName} name={row.buyerName} size={36} />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-ink">
+          {row.buyerName.split(" ")[0]} — {truncate(row.listing.title, 30)}
+        </p>
+        <p className="mt-0.5 text-xs text-ink-soft">
+          {formatNGN(row.amountNGN)} · {formatRelative(row.createdAt)}
+        </p>
+      </div>
+      <Button
+        asChild
+        size="sm"
+        variant={isDispute ? "outline" : "default"}
+        className={cn(
+          "h-9 px-3 text-xs font-semibold",
+          isShip && "bg-brand text-brand-foreground hover:bg-brand/90",
+          isDispute && "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100",
+        )}
+      >
+        <Link to={`/app/orders/${row.orderToken}`}>
+          {isShip ? "Mark shipped →" : "Respond →"}
+        </Link>
+      </Button>
+    </li>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*                              Recent orders                                 */
+/* -------------------------------------------------------------------------- */
+
+function RecentOrdersCard({
+  rows,
+  loading,
+}: {
+  rows: SellerOrderRow[];
+  loading: boolean;
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-border bg-white">
+      <header className="flex items-center justify-between px-5 py-4">
+        <h3 className="text-sm font-semibold text-ink">Recent orders</h3>
+        <Link
+          to="/app/orders"
+          className="text-xs font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+        >
+          View all
+        </Link>
+      </header>
+      {loading ? (
+        <div className="space-y-2 px-5 pb-5">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="px-6 py-10 text-center">
+          <p className="text-sm font-medium text-ink">No orders yet</p>
+          <p className="mt-1 text-xs text-ink-soft">
+            Share your shop link to get your first sale.
+          </p>
+        </div>
+      ) : (
+        <ul className="divide-y divide-border">
+          {rows.map((row) => (
+            <RecentOrderRow key={row.orderToken} row={row} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function RecentOrderRow({ row }: { row: SellerOrderRow }) {
+  return (
+    <li>
+      <Link
+        to={`/app/orders/${row.orderToken}`}
+        className="flex items-center justify-between gap-3 px-5 py-3 text-sm hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+      >
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-ink">
+            {row.listing.title}
+          </p>
+          <p className="truncate text-xs text-ink-soft">
+            {row.buyerName} · {formatRelative(row.createdAt)}
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <span className="text-sm font-semibold tabular-nums text-ink">
+            {formatNGN(row.amountNGN)}
+          </span>
+          <StatusPill status={row.status} />
+        </div>
+      </Link>
+    </li>
+  );
+}
+
+function StatusPill({ status }: { status: ApiOrderStatus }) {
+  const map: Record<
+    ApiOrderStatus,
+    { bg: string; text: string; label: string }
+  > = {
+    pending_payment: {
+      bg: "bg-surface",
+      text: "text-ink-soft",
+      label: "PENDING",
     },
-    shipped: { bg: "bg-blue-100", text: "text-blue-800", label: "Shipped" },
-    delivered: { bg: "bg-blue-100", text: "text-blue-800", label: "Delivered" },
-    released: {
+    payment_locked: {
+      bg: "bg-brand-soft",
+      text: "text-brand-soft-foreground",
+      label: "LOCKED",
+    },
+    shipped: {
+      bg: "bg-brand-soft",
+      text: "text-brand-soft-foreground",
+      label: "SHIPPED",
+    },
+    delivered: {
+      bg: "bg-brand-soft",
+      text: "text-brand-soft-foreground",
+      label: "DELIVERED",
+    },
+    completed: {
       bg: "bg-emerald-100",
       text: "text-emerald-800",
-      label: "Complete",
+      label: "COMPLETED",
     },
-    disputed: { bg: "bg-rose-100", text: "text-rose-800", label: "Disputed" },
+    disputed: {
+      bg: "bg-amber-100",
+      text: "text-amber-800",
+      label: "DISPUTED",
+    },
+    refunded: {
+      bg: "bg-rose-100",
+      text: "text-rose-800",
+      label: "REFUNDED",
+    },
   };
-  const s = map[status] ?? {
-    bg: "bg-surface",
-    text: "text-ink-soft",
-    label: status,
-  };
+  const s = map[status];
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold whitespace-nowrap",
+        "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-tight",
         s.bg,
         s.text,
       )}
     >
-      <Check className="h-2.5 w-2.5 opacity-60" />
       {s.label}
     </span>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/*                            Listings preview                                */
+/* -------------------------------------------------------------------------- */
+
+function ListingsPreviewCard({
+  listings,
+  loading,
+}: {
+  listings: MyListing[];
+  loading: boolean;
+}) {
+  return (
+    <section className="overflow-hidden rounded-2xl border border-border bg-white">
+      <header className="flex items-center justify-between px-5 py-4">
+        <h3 className="text-sm font-semibold text-ink">Your listings</h3>
+        <Link
+          to="/app/listings"
+          className="text-xs font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+        >
+          Manage →
+        </Link>
+      </header>
+
+      {loading ? (
+        <div className="grid grid-cols-2 gap-3 p-4">
+          <Skeleton className="aspect-square w-full rounded-xl" />
+          <Skeleton className="aspect-square w-full rounded-xl" />
+        </div>
+      ) : listings.length === 0 ? (
+        <div className="px-6 py-10 text-center">
+          <Tag className="mx-auto h-5 w-5 text-ink-soft" />
+          <p className="mt-3 text-sm font-medium text-ink">No listings yet</p>
+          <p className="mt-1 text-xs text-ink-soft">
+            Your first listing takes about 2 minutes — title, price, photo,
+            done.
+          </p>
+          <Button
+            asChild
+            size="sm"
+            className="mt-4 bg-brand text-brand-foreground hover:bg-brand/90"
+          >
+            <Link to="/app/listings">
+              <Plus className="mr-1 h-4 w-4" />
+              Create your first listing
+            </Link>
+          </Button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 p-4">
+          {listings.slice(0, 3).map((l) => (
+            <ListingTile key={l.id} listing={l} />
+          ))}
+          {/* Always show the empty-creator tile after the listings, capped at 4 total. */}
+          {listings.length < 4 && <NewListingTile />}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ListingTile({ listing }: { listing: MyListing }) {
+  const url = listing.images[0] ? sanitizeUrl(listing.images[0]) : undefined;
+  return (
+    <Link
+      to={`/buy/${listing.id}`}
+      className="group block overflow-hidden rounded-xl border border-border bg-white transition-colors hover:border-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+    >
+      {url ? (
+        <img
+          src={url}
+          alt={listing.title}
+          loading="lazy"
+          className="aspect-square w-full object-cover"
+        />
+      ) : (
+        <div
+          aria-hidden
+          className="flex aspect-square w-full items-center justify-center bg-surface text-ink-soft"
+        >
+          <PackageCheck className="h-8 w-8 opacity-50" />
+        </div>
+      )}
+      <div className="p-3">
+        <p className="line-clamp-2 text-sm font-medium text-ink">
+          {listing.title}
+        </p>
+        <p className="mt-1 text-sm font-semibold tabular-nums text-ink">
+          {formatNGN(listing.priceNGN)}
+        </p>
+      </div>
+    </Link>
+  );
+}
+
+function NewListingTile() {
+  return (
+    <Link
+      to="/app/listings"
+      className="flex aspect-square w-full flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-surface text-ink-soft transition-colors hover:border-brand hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+    >
+      <Plus className="h-5 w-5" />
+      <span className="text-xs font-medium">New listing</span>
+    </Link>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*                            Reputation strip                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Placeholder reputation strip — real values will come from a Nostr
+ * kind 1985 review feed (per NIP.md). For now the strip renders the
+ * brand-new-seller copy so the section is honest about what's known.
+ */
+function ReputationStrip() {
+  return (
+    <section className="rounded-2xl border border-border bg-brand-soft/40 p-5 sm:p-6">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-soft-foreground">
+        Your reputation
+      </p>
+      <div className="mt-3 flex items-start gap-3">
+        <Sparkles className="mt-0.5 h-5 w-5 shrink-0 text-brand" />
+        <div>
+          <p className="text-sm font-medium text-ink">
+            Your reputation will appear here after your first completed sale.
+          </p>
+          <p className="mt-1 text-xs text-ink-soft">
+            Buyers will leave a star rating and review on Nostr — verifiable
+            from any client, not just SafeSale.
+          </p>
+        </div>
+        {/* Filled-star icons hidden for new sellers, but kept here as a
+            visual hint for the data shape we'll show once we have reviews. */}
+        <span aria-hidden className="ml-auto hidden text-brand sm:inline-flex">
+          <Star className="h-4 w-4 fill-current" />
+        </span>
+      </div>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 helpers                                    */
+/* -------------------------------------------------------------------------- */
+
+function truncate(s: string, n: number): string {
+  if (s.length <= n) return s;
+  return s.slice(0, n - 1).trimEnd() + "…";
 }
