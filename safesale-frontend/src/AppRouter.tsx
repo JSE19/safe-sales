@@ -42,7 +42,7 @@ export function AppRouter() {
         <Route path="/app" element={<DashboardHome />} />
         <Route path="/app/listings" element={<ListingsPage />} />
         <Route path="/app/orders" element={<OrdersPage />} />
-        <Route path="/app/orders/:id" element={<OrderDetailPage />} />
+        <Route path="/app/orders/:token" element={<OrderDetailPage />} />
         <Route path="/app/earnings" element={<EarningsPage />} />
         <Route path="/app/dispute" element={<DisputePage />} />
         <Route path="/app/dispute/:id" element={<DisputePage />} />

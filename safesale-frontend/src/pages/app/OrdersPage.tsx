@@ -107,7 +107,7 @@ export default function OrdersPage() {
               return (
                 <li key={o.id}>
                   <Link
-                    to={`/app/orders/${o.shortId}`}
+                    to={`/app/orders/${o.orderToken}`}
                     className="block overflow-hidden rounded-2xl border border-border bg-white p-4 transition-all hover:-translate-y-0.5 hover:shadow-[0_12px_30px_-16px_rgba(15,42,30,0.18)]"
                   >
                     <div className="flex items-start gap-3">
