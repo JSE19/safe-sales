@@ -12,12 +12,12 @@ import { EscrowShield } from "@/components/safesale/EscrowShield";
 import { Countdown } from "@/components/safesale/Countdown";
 import { useListing } from "@/hooks/useListing";
 import { useAuthor } from "@/hooks/useAuthor";
-import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { getSeller as getFixtureSeller } from "@/lib/mock";
-import { apiClient, ApiError, type ApiBitnobAccount, type ApiOrder } from "@/lib/api";
+import { apiClient, ApiError, type ApiOrder } from "@/lib/api";
 import { formatNGN } from "@/lib/format";
 import { genUserName } from "@/lib/genUserName";
 import { useToast } from "@/hooks/useToast";
+import { generateBuyerKey, persistBuyerKey } from "@/lib/buyerKey";
 import {
   ShieldCheck,
   ChevronLeft,
@@ -31,7 +31,6 @@ import {
   MapPin,
   Phone,
   Bookmark,
-  Mail,
   Truck,
 } from "lucide-react";
 import {
@@ -49,7 +48,6 @@ type Step = "details" | "instructions" | "waiting" | "detected" | "secured";
 export default function Checkout() {
   const { id = "" } = useParams<{ id: string }>();
   const { data: listing, isLoading: listingLoading } = useListing(id);
-  const { user } = useCurrentUser();
   const sellerPubkey = listing?.sellerPubkey;
   const author = useAuthor(sellerPubkey);
   const fixtureSeller = sellerPubkey ? getFixtureSeller(sellerPubkey) : undefined;
@@ -83,11 +81,17 @@ export default function Checkout() {
    * step. Once we have a token, the polling effect below will keep
    * `liveOrder` fresh so the UI can react to backend state changes
    * (e.g. webhook → payment_locked).
+   *
+   * Shape mirrors the flat `CreateOrderResponse` returned by
+   * `POST /api/orders` on the real backend — orderToken + Bitnob virtual
+   * account details + expiry. No nested `bitnob` object.
    */
   const [createdOrder, setCreatedOrder] = useState<{
-    token: string;
-    bitnob?: ApiBitnobAccount;
-    bitnobExpiresAt?: string;
+    orderToken: string;
+    shortId: string;
+    bitnobAccount: string;
+    bitnobBank: string;
+    expiresAt: string;
   } | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -95,13 +99,17 @@ export default function Checkout() {
   // Poll the order's current state once we have a token. The mock
   // client transitions pending_payment → payment_locked ~5s after
   // createOrder, simulating the Bitnob webhook landing.
+  //
+  // `apiClient.getOrder` returns the full `{order, listing, seller, dispute}`
+  // envelope; for checkout we only care about `order.status`.
   const { data: liveOrder } = useQuery<ApiOrder | null>({
-    queryKey: ["safesale", "order", createdOrder?.token ?? ""],
-    enabled: !!createdOrder?.token,
+    queryKey: ["safesale", "order", createdOrder?.orderToken ?? ""],
+    enabled: !!createdOrder?.orderToken,
     queryFn: async () => {
       if (!createdOrder) return null;
       try {
-        return await apiClient.getOrder(createdOrder.token);
+        const env = await apiClient.getOrder(createdOrder.orderToken);
+        return env.order;
       } catch (err) {
         if (err instanceof ApiError && err.code === "ORDER_NOT_FOUND") {
           return null;
@@ -169,7 +177,12 @@ export default function Checkout() {
   // a real account. Computed via useState initializer (the one place a
   // hook is allowed to call Date.now()), and stable for the lifetime
   // of the page so the Countdown doesn't reset across re-renders.
-  const [placeholderBitnob] = useState<ApiBitnobAccount>(() => ({
+  const [placeholderBitnob] = useState<{
+    accountNumber: string;
+    bankName: string;
+    accountName: string;
+    expiresAt: string;
+  }>(() => ({
     accountNumber: "—",
     bankName: "—",
     accountName: "SafeSale Escrow",
@@ -202,9 +215,26 @@ export default function Checkout() {
 
   // ------------------------------------------------------------------
   //  Order creation — fires when the user taps "Continue to payment"
-  //  on the instructions screen. The backend (or mock) issues a Bitnob
-  //  virtual account and returns it; we render the details and wait
-  //  for the user to confirm they've actually sent the transfer.
+  //  on the instructions screen.
+  //
+  //  1. Generate a one-time Nostr keypair in the browser for the buyer.
+  //     The nsec is persisted to `localStorage` under
+  //     `safesale:buyer:<orderToken>` so the Buyer Order Page can read
+  //     it back later to sign the Cashu P2PK release.
+  //  2. Send the corresponding npub to the backend along with the
+  //     buyer's name / phone / city / address (the real backend on
+  //     `origin/backend` requires these fields — see
+  //     `routes/orders.ts::CreateOrderSchema`).
+  //  3. Store the flat `CreateOrderResponse` (orderToken + Bitnob
+  //     virtual account details) so the Instructions step can render
+  //     them.
+  //
+  //  KEY ORDER MATTERS: we generate-and-persist the keypair BEFORE
+  //  awaiting createOrder so that if the user refreshes mid-call (or
+  //  the network drops) we don't end up with a token on the backend
+  //  pointing at an npub whose nsec was never written to disk.
+  //  Worst case: an orphan key under a token that doesn't exist. Best
+  //  case: success. Either way the release flow is never blocked.
   // ------------------------------------------------------------------
 
   const handleIssueAccount = async () => {
@@ -212,20 +242,67 @@ export default function Checkout() {
     setCreating(true);
     setCreateError(null);
     try {
-      const listingCoord = `30018:${listing.sellerPubkey}:${listing.id}`;
-      const buyerContact = contactMethod === "email" ? email : phone;
+      // Step 1: pre-generate a tentative token-less key? No — we don't
+      // have the token yet. The backend generates it. So we generate
+      // the key first, then create the order with the resulting npub,
+      // then persist the nsec under the returned token in a single
+      // tick once we have it.
+      const tentativeKey = generateBuyerKey("__pending__");
       const res = await apiClient.createOrder({
-        listingCoord,
-        deliveryAddress: `${address}, ${city}`,
-        buyerContact,
-        contactChannel: contactMethod === "email" ? "email" : "sms",
-        buyerPubkey: user?.pubkey,
+        listingId: listing.id,
+        buyerNpub: tentativeKey.npub,
+        buyerName: name.trim(),
+        buyerPhone: phone.trim(),
+        buyerEmail: email.trim() || undefined,
+        buyerCity: city.trim(),
+        buyerAddress: address.trim() || undefined,
+        contactMethod,
+        variant: listing.tags?.[0],
+        // Bridge: hand the mock client the listing data so it can
+        // accept orders for listings it didn't ship with as fixtures
+        // (e.g. anything the seller just published to Nostr).
+        // The real backend silently ignores this — its DB already
+        // has the listing from the seller's POST /api/listings.
+        _listingHint: {
+          id: listing.id,
+          sellerId: listing.sellerPubkey,
+          title: listing.title,
+          description: listing.description,
+          priceNGN: listing.priceNGN,
+          images: listing.images.map((url) => ({ url })),
+          category: listing.category ?? "general",
+          variants: listing.tags ?? null,
+          inStock: listing.inStock,
+          delivery: listing.delivery ?? null,
+          seller: {
+            name: sellerName,
+            handle: fixtureSeller?.handle,
+            location: fixtureSeller?.location,
+            verified: sellerVerified,
+          },
+        },
       });
 
+      // Re-persist the keypair under the real orderToken, then drop
+      // the tentative entry. This atomic-feeling swap guarantees that
+      // `getBuyerKey(orderToken)` works the moment the buyer arrives
+      // at /order/:token.
+      persistBuyerKey(res.orderToken, {
+        nsec: tentativeKey.nsec,
+        npub: tentativeKey.npub,
+      });
+      try {
+        localStorage.removeItem("safesale:buyer:__pending__");
+      } catch {
+        // best-effort cleanup
+      }
+
       setCreatedOrder({
-        token: res.order.token,
-        bitnob: res.order.bitnob,
-        bitnobExpiresAt: res.order.bitnobExpiresAt,
+        orderToken: res.orderToken,
+        shortId: res.shortId,
+        bitnobAccount: res.bitnobAccount,
+        bitnobBank: res.bitnobBank,
+        expiresAt: res.expiresAt,
       });
     } catch (err) {
       const msg =
@@ -256,26 +333,39 @@ export default function Checkout() {
     if (!createdOrder) return;
     setStep("waiting");
 
-    // Surface the "we sent your order link" notification the same way
-    // the backend would (Termii SMS / Resend email per BACKEND.md). In
-    // mock mode there's no real backend so the toast is the demo
-    // surrogate — judges see the story is intact.
-    const buyerContact = contactMethod === "email" ? email : phone;
+    // Honest demo toast — the email/SMS provider integration is owned
+    // by the backend (Termii for SMS, Resend for email per BACKEND.md)
+    // and isn't wired yet. The order link IS shown on the Secured
+    // screen with copy + bookmark + screenshot prompts, which the PRD
+    // explicitly calls the primary delivery path. The toast just
+    // confirms the user's action landed.
     toast({
-      title:
-        contactMethod === "email"
-          ? "Order link sent to your email"
-          : "Order link sent via SMS",
-      description: buyerContact,
+      title: "Looking for your transfer…",
+      description: "Save your order link on the next screen — it's how you'll come back to this order.",
     });
   };
 
   // The Bitnob account details come from the API response. In real mode
   // these are issued by Bitnob; in mock mode the mock client makes them
   // up. Either way they're per-order and survive across polls.
-  const bitnob: ApiBitnobAccount = createdOrder?.bitnob ?? placeholderBitnob;
-  const bitnobExpiresAt =
-    createdOrder?.bitnobExpiresAt ?? bitnob.expiresAt;
+  //
+  // Backend returns a flat `{ bitnobAccount, bitnobBank, expiresAt, ... }`
+  // (no nested object), so we synthesize the small shape the Instructions
+  // panel and Countdown need from those flat fields.
+  const bitnob: {
+    accountNumber: string;
+    bankName: string;
+    accountName: string;
+    expiresAt: string;
+  } = createdOrder
+    ? {
+        accountNumber: createdOrder.bitnobAccount,
+        bankName: createdOrder.bitnobBank,
+        accountName: "SafeSale Escrow",
+        expiresAt: createdOrder.expiresAt,
+      }
+    : placeholderBitnob;
+  const bitnobExpiresAt = createdOrder?.expiresAt ?? bitnob.expiresAt;
 
   const heroImage = sanitizeUrl(listing.images[0]);
 
@@ -343,10 +433,10 @@ export default function Checkout() {
             {step === "secured" && createdOrder && (
               <Secured
                 amount={listing.priceNGN}
-                orderToken={createdOrder.token}
+                orderToken={createdOrder.orderToken}
                 contactMethod={contactMethod}
                 contactValue={contactMethod === "email" ? email : phone}
-                onContinue={() => navigate(`/order/${createdOrder.token}`)}
+                onContinue={() => navigate(`/order/${createdOrder.orderToken}`)}
               />
             )}
           </div>
@@ -615,7 +705,12 @@ function Instructions({
   error,
 }: {
   amount: number;
-  bitnob: ApiBitnobAccount;
+  bitnob: {
+    accountNumber: string;
+    bankName: string;
+    accountName: string;
+    expiresAt: string;
+  };
   expiresAt: string;
   onConfirm: () => void;
   pending: boolean;
@@ -830,9 +925,11 @@ function Secured({
         />
       </div>
 
-      {/* SAVE YOUR LINK — the critical bit. Without this URL the buyer has
-          no way back to their escrow. Spec calls for prominent bookmark
-          instruction + email/SMS delivery. */}
+      {/* SAVE YOUR LINK — the critical bit. Without this URL the buyer
+          has no way back to their escrow. Per PRD, the link is
+          *displayed on screen with a clear instruction to bookmark or
+          screenshot it*; email/SMS delivery is a future backend job
+          (Termii + Resend), not promised here until it's actually wired. */}
       <div className="rounded-2xl border border-amber-200/70 bg-amber-50/60 p-5">
         <div className="flex items-start gap-3">
           <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
@@ -840,20 +937,18 @@ function Secured({
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-ink">
-              Save your order link
+              Save your order link now
             </p>
             <p className="mt-1 text-xs leading-relaxed text-ink-soft">
               This is your only way back to this order — you don't have an
-              account. We've also sent it to your{" "}
-              <span className="font-medium text-ink">
-                {contactMethod === "email" ? "email" : "phone via SMS"}
-              </span>
+              account. <span className="font-medium text-ink">Bookmark it, screenshot it, or copy it to your{" "}
+              {contactMethod === "email" ? "email drafts" : "WhatsApp chat"}</span>
               {contactValue && (
                 <>
-                  {" "}(<span className="font-medium text-ink">{contactValue}</span>)
+                  {" "}({contactValue})
                 </>
-              )}
-              .
+              )}{" "}
+              before leaving this page.
             </p>
           </div>
         </div>
@@ -875,7 +970,7 @@ function Secured({
         </div>
 
         <div className="mt-3 grid grid-cols-3 gap-2">
-          <SaveAction icon={Mail} label={`${contactMethod === "email" ? "Email" : "SMS"} sent`} done />
+          <SaveAction icon={Copy} label="Copy the link" />
           <SaveAction icon={Bookmark} label="Bookmark this page" />
           <SaveAction icon={ImageDown} label="Screenshot it" />
         </div>

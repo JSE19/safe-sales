@@ -1,26 +1,29 @@
 /**
  * SafeSale HTTP API — real (fetch) implementation.
  *
- * Hits the backend defined in `BACKEND.md`. Activated by setting
- * `VITE_API_URL`; the toggle lives in `client.ts`.
+ * Hits the backend running on `origin/backend` (Fastify + Prisma).
+ * Activated by setting `VITE_API_URL`; the toggle lives in `client.ts`.
  *
  * All methods reject with `ApiError` on non-2xx. The backend's error
- * envelope is `{ error: { code, message } }` — we surface those fields
- * verbatim so the UI can render `err.message` directly.
+ * envelope per `backend/src/lib/errors.ts` is `{ message, code? }` at
+ * the top level — we accept both that shape and the older
+ * `{ error: { code, message } }` envelope for forward compatibility.
  *
- * Auth: buyer endpoints are public (token in URL is the credential).
- * Seller endpoints will need NIP-98 signed-event headers (added in a
- * later commit when seller wiring lands).
+ * Auth: buyer endpoints are public (the orderToken in the URL IS the
+ * auth). Seller endpoints will need NIP-98 signed-event headers (added
+ * in a later commit when seller wiring lands).
  */
 
 import type {
-  ApiOrder,
   CreateOrderRequest,
   CreateOrderResponse,
+  GetOrderResponse,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,
   ReleaseOrderResponse,
+  ShipOrderRequest,
+  ShipOrderResponse,
 } from "./types";
 import { ApiError } from "./errors";
 
@@ -74,10 +77,16 @@ async function request<T>(
   }
 
   if (!res.ok) {
-    const envelope = payload as { error?: { code?: string; message?: string } } | null;
-    const code = envelope?.error?.code ?? "UNKNOWN";
+    // Accept both envelope shapes — the Fastify backend on origin/backend
+    // currently throws HttpError which serializes as { message, statusCode };
+    // an older draft used { error: { code, message } }. Handle both.
+    const flat = payload as { message?: string; code?: string } | null;
+    const nested = payload as { error?: { code?: string; message?: string } } | null;
+    const code = flat?.code ?? nested?.error?.code ?? "UNKNOWN";
     const message =
-      envelope?.error?.message ?? `Request failed (HTTP ${res.status}).`;
+      flat?.message ??
+      nested?.error?.message ??
+      `Request failed (HTTP ${res.status}).`;
     throw new ApiError(code, message, res.status);
   }
 
@@ -86,10 +95,17 @@ async function request<T>(
 
 export const httpApi = {
   createOrder(req: CreateOrderRequest): Promise<CreateOrderResponse> {
-    return request<CreateOrderResponse>("POST", "/api/orders", req);
+    // Strip mock-only fields before sending over the wire. The real
+    // backend has no notion of `_listingHint`; the listing already
+    // exists in its Postgres DB from the seller's POST /api/listings.
+    const { _listingHint: _hint, ...body } = req;
+    return request<CreateOrderResponse>("POST", "/api/orders", body);
   },
-  getOrder(token: string): Promise<ApiOrder> {
-    return request<ApiOrder>("GET", `/api/orders/${encodeURIComponent(token)}`);
+  getOrder(token: string): Promise<GetOrderResponse> {
+    return request<GetOrderResponse>(
+      "GET",
+      `/api/orders/${encodeURIComponent(token)}`,
+    );
   },
   releaseOrder(
     token: string,
@@ -108,6 +124,16 @@ export const httpApi = {
     return request<OpenDisputeResponse>(
       "POST",
       `/api/orders/${encodeURIComponent(token)}/dispute`,
+      req,
+    );
+  },
+  shipOrder(
+    token: string,
+    req: ShipOrderRequest,
+  ): Promise<ShipOrderResponse> {
+    return request<ShipOrderResponse>(
+      "POST",
+      `/api/orders/${encodeURIComponent(token)}/ship`,
       req,
     );
   },

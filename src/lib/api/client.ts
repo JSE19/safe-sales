@@ -15,26 +15,34 @@
 import { httpApi } from "./http";
 import { mockApi } from "./mocks";
 import type {
-  ApiOrder,
   CreateOrderRequest,
   CreateOrderResponse,
+  GetOrderResponse,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,
   ReleaseOrderResponse,
+  ShipOrderRequest,
+  ShipOrderResponse,
 } from "./types";
 
 export interface ApiClient {
+  /** POST /api/orders — buyer initiates a purchase. */
   createOrder(req: CreateOrderRequest): Promise<CreateOrderResponse>;
-  getOrder(token: string): Promise<ApiOrder>;
+  /** GET /api/orders/:token — buyer order page envelope. */
+  getOrder(token: string): Promise<GetOrderResponse>;
+  /** POST /api/orders/:token/release — buyer releases the escrow. */
   releaseOrder(
     token: string,
     req: ReleaseOrderRequest,
   ): Promise<ReleaseOrderResponse>;
+  /** POST /api/orders/:token/dispute — buyer or seller opens a dispute. */
   openDispute(
     token: string,
     req: OpenDisputeRequest,
   ): Promise<OpenDisputeResponse>;
+  /** POST /api/orders/:token/ship — seller marks the order shipped. */
+  shipOrder(token: string, req: ShipOrderRequest): Promise<ShipOrderResponse>;
 }
 
 /** True when the real backend URL is configured. */

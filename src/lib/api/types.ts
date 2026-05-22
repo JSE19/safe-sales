@@ -1,142 +1,291 @@
 /**
  * SafeSale API DTOs.
  *
- * Each interface mirrors the request/response shape documented in
- * `BACKEND.md` §HTTP API. Keep this file in sync with that document —
- * a breaking change there must update this file in the same PR.
+ * Mirrors the shapes returned by the SafeSale backend on
+ * `origin/backend` (Fastify + Prisma + Postgres). Specifically:
  *
- * Buyer-slice endpoints only for now. Seller and admin DTOs will be
- * added when those flows are wired.
+ *   - `prisma/schema.prisma`  — the `Order`, `Listing`, `Seller`,
+ *     `Dispute` models + `EscrowStatus`/`DisputeStatus` enums.
+ *   - `src/routes/orders.ts`   — POST /api/orders, GET /api/orders/:token
+ *   - `src/routes/escrow.ts`   — POST /api/orders/:token/ship | release | dispute
+ *   - `src/routes/listings.ts` — POST /api/listings, GET /api/listings/:id
+ *   - `src/routes/sellers.ts`  — POST /api/sellers, GET /api/sellers/:handle
+ *
+ * Keep this file in lockstep with that schema. When the backend evolves,
+ * update it here in the same PR — the build will catch every consumer.
+ *
+ * Buyer-slice endpoints are typed in full. Seller and admin endpoints
+ * are added as those flows are wired (currently just enough to make the
+ * checkout → buyer-order flow work end-to-end).
  */
 
-/* ----------------------------- Order shapes ----------------------------- */
+/* --------------------------------- enums ------------------------------- */
 
-/** Mirrors BACKEND.md `OrderStatus` enum. */
+/** Mirrors prisma `EscrowStatus`. 7 values, no aliases. */
 export type ApiOrderStatus =
   | "pending_payment"
   | "payment_locked"
   | "shipped"
   | "delivered"
-  | "released"
+  | "completed"
   | "disputed"
-  | "resolved"
-  | "refunded"
-  | "expired";
+  | "refunded";
 
-/** Bitnob virtual-account details returned to the buyer at checkout. */
-export interface ApiBitnobAccount {
-  accountNumber: string;
-  bankName: string;
-  accountName: string;
-  /** ISO 8601 — the buyer must complete payment before this time. */
+/** Mirrors prisma `DisputeStatus`. */
+export type ApiDisputeStatus =
+  | "direct_resolution"
+  | "escalated"
+  | "evidence_requested"
+  | "mediating"
+  | "resolved";
+
+/* -------------------------------- entities ----------------------------- */
+
+/** A listing image as stored in `Listing.images` (Json field). */
+export interface ApiListingImage {
+  url?: string;
+  /** Deterministic seed used by `ProductImage` when no URL is present. */
+  seed?: string;
+  alt?: string;
+}
+
+/** Subset of `Seller` returned by `GET /api/orders/:token` (no payout details). */
+export interface ApiSeller {
+  id: string;
+  npub: string;
+  pubkey: string;
+  handle: string;
+  name: string;
+  location: string;
+  category: string;
+  bio?: string | null;
+  verified: boolean;
+  /** Present when the seller has set a Lightning payout address. */
+  lnAddress?: string | null;
+  createdAt: string;
+}
+
+/** Subset of `Listing` returned by `GET /api/orders/:token`. */
+export interface ApiListing {
+  id: string;
+  sellerId: string;
+  title: string;
+  description: string;
+  priceNGN: number;
+  images: ApiListingImage[];
+  category: string;
+  variants?: string[] | null;
+  inStock: number;
+  delivery?: string | null;
+  active: boolean;
+  nostrEventId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * `Order` row from the backend. Mirrors prisma `Order` exactly,
+ * except `cashuToken` is **never** returned over HTTP — it is bearer
+ * money and the backend holds it server-side until release.
+ */
+export interface ApiOrder {
+  id: string;
+  shortId: string;
+  /**
+   * URL-safe secret. This is the buyer's only credential — possession
+   * of the token IS the auth. Present in the URL at /order/:token.
+   */
+  orderToken: string;
+
+  listingId: string;
+  sellerId: string;
+
+  /** Bech32 of the buyer's one-time Nostr key (P2PK lock target). */
+  buyerNpub: string;
+  /** Hex form of the same key. */
+  buyerPubkey: string;
+
+  buyerName: string;
+  buyerPhone: string;
+  buyerEmail?: string | null;
+  buyerCity: string;
+  buyerAddress?: string | null;
+  contactMethod?: "phone" | "email" | null;
+
+  variant?: string | null;
+
+  amountNGN: number;
+  amountSats: number;
+
+  status: ApiOrderStatus;
+
+  /** Bitnob virtual account assigned at order creation (24h expiry). */
+  bitnobAccount?: string | null;
+  bitnobBank?: string | null;
+
+  trackingNumber?: string | null;
+  carrier?: string | null;
+
+  shippedAt?: string | null;
+  releasedAt?: string | null;
+  refundedAt?: string | null;
+
+  /** 7 days after `shippedAt` — silent-buyer auto-release deadline. */
+  autoReleaseAt?: string | null;
+  /** Bitnob virtual-account expiry. */
+  expiresAt?: string | null;
+
+  notes?: string | null;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A `Dispute` row, nullable on the order envelope. */
+export interface ApiDispute {
+  id: string;
+  orderId: string;
+  reason: string;
+  summary?: string | null;
+  openedBy: "buyer" | "seller";
+  priority: "low" | "medium" | "high";
+  status: ApiDisputeStatus;
+  directResolutionUntil?: string | null;
+  evidenceDueAt?: string | null;
+  isReturn: boolean;
+  /** Photo evidence references (Blossom URLs etc.). Shape evolves with the dispute flow. */
+  returnEvidence?: unknown;
+  /** Final outcome JSON, populated only when `status === 'resolved'`. */
+  resolution?: unknown;
+  createdAt: string;
+  resolvedAt?: string | null;
+}
+
+/* ------------------------- request / response shapes ------------------- */
+
+/**
+ * Subset of an `ApiListing` that the mock client can use to register a
+ * newly-discovered listing in its in-memory store. Only relevant when
+ * the listing didn't come from a fixture — e.g. it was just published
+ * to Nostr by the seller and the buyer found it via the relay. The
+ * real backend ignores this field; on Postgres the listing already
+ * exists (the seller's POST /api/listings created it). This is the
+ * "bridge" that lets the mock pretend it has a backend DB without
+ * forcing the buyer flow to know which world it's in.
+ */
+export interface MockListingHint {
+  /** Same as CreateOrderRequest.listingId; carried for clarity. */
+  id: string;
+  sellerId: string;
+  title: string;
+  description: string;
+  priceNGN: number;
+  /** Mix of URL-based and seed-based images is fine. */
+  images: ApiListingImage[];
+  category: string;
+  variants?: string[] | null;
+  inStock?: number;
+  delivery?: string | null;
+  /** Optional seller-side display info for the mock seller stub. */
+  seller?: {
+    name?: string;
+    handle?: string;
+    location?: string;
+    verified?: boolean;
+  };
+}
+
+/**
+ * `POST /api/orders` request body. Field names match the Zod schema in
+ * `backend/src/routes/orders.ts::CreateOrderSchema`.
+ *
+ * The optional `_listingHint` field is **mock-only** and is stripped
+ * by the real HTTP client before serialization. See `MockListingHint`
+ * for why it exists.
+ */
+export interface CreateOrderRequest {
+  /** cuid from `GET /api/listings/:id`. */
+  listingId: string;
+  /** Bech32 of the buyer's one-time Nostr key (generated in browser). */
+  buyerNpub: string;
+  buyerName: string;
+  buyerPhone: string;
+  buyerEmail?: string;
+  buyerCity: string;
+  buyerAddress?: string;
+  contactMethod?: "phone" | "email";
+  variant?: string;
+
+  /** @internal — mock-only. The HTTP client strips this. */
+  _listingHint?: MockListingHint;
+}
+
+/**
+ * `POST /api/orders` response body — flat, no nested `order`. Mirrors
+ * the explicit return statement in `routes/orders.ts`.
+ */
+export interface CreateOrderResponse {
+  orderToken: string;
+  shortId: string;
+  bitnobAccount: string;
+  bitnobBank: string;
+  amountNGN: number;
   expiresAt: string;
 }
 
 /**
- * Read-only view of an order as returned by `GET /api/orders/:token`.
- *
- * Per BACKEND.md the response is the Order object **minus** the cashu
- * token (which is bearer money and is never returned over HTTP). The
- * UI gets `cashuTokenHash` and `p2pkPubkey` so it can render and
- * verify, but the token itself stays server-side until release.
+ * `GET /api/orders/:token` response — the envelope this page is built
+ * around. Buyer Order Page, Seller Orders, and Admin Dispute Detail
+ * all rely on this shape.
  */
-export interface ApiOrder {
-  id: string;
-  token: string;
-  status: ApiOrderStatus;
-
-  listingCoord: string;
-  sellerPubkey: string;
-  buyerPubkey: string;
-
-  amountNGN: number;
-  amountSats: number;
-  mintUrl: string;
-  cashuTokenHash?: string;
-  p2pkPubkey?: string;
-
-  bitnob?: ApiBitnobAccount;
-
-  carrier?: string;
-  trackingNumber?: string;
-  buyerContactHint?: string;
-
-  /** ISO 8601 timestamps */
-  createdAt: string;
-  updatedAt: string;
-  paidAt?: string;
-  lockedAt?: string;
-  shippedAt?: string;
-  deliveredAt?: string;
-  releasedAt?: string;
-  autoReleaseAt?: string;
-  bitnobExpiresAt?: string;
-
-  /** The nostr event ID of the most recent kind 33888 update. */
-  orderEventId?: string;
+export interface GetOrderResponse {
+  order: ApiOrder;
+  listing: ApiListing;
+  seller: ApiSeller;
+  /** Null when no dispute has been opened on this order. */
+  dispute: ApiDispute | null;
 }
 
-/* ---------------------------- Request bodies --------------------------- */
-
-export interface CreateOrderRequest {
-  /** "30018:<seller-pubkey>:<d>" — the listing coordinate per NIP-23. */
-  listingCoord: string;
-  /** Plaintext; backend NIP-44-encrypts it to the seller before publishing. */
-  deliveryAddress: string;
-  /** Email or phone string. */
-  buyerContact: string;
-  contactChannel: "email" | "sms";
-  /**
-   * If omitted, the backend generates a one-time keypair and returns it
-   * in `CreateOrderResponse.buyerKeypair`. The browser MUST persist that
-   * nsec to localStorage — it's required to sign the P2PK release later.
-   */
-  buyerPubkey?: string;
-}
-
-export interface CreateOrderResponse {
-  order: ApiOrder & {
-    /** Convenience: full URL to the buyer order page. */
-    orderUrl: string;
-  };
-  /** Present only when the backend generated the buyer's key. Returned ONCE. */
-  buyerKeypair?: {
-    nsec: string;
-    npub: string;
-  };
-}
-
+/**
+ * `POST /api/orders/:token/release` request body.
+ *
+ * The buyer's one-time Nostr private key, hex-encoded. The backend
+ * forwards it to the Cashu mint to redeem the P2PK-locked token.
+ *
+ * SECURITY: this key has zero authority outside of releasing THIS
+ * specific Cashu token. It is generated in the buyer's browser at
+ * checkout, stored under `safesale:buyer:<orderToken>` in
+ * localStorage, and read back here for release. See `src/lib/buyerKey.ts`.
+ */
 export interface ReleaseOrderRequest {
-  /** Schnorr signature over the cashu spend payload (NUT-11 P2PK unlock). */
-  p2pkUnlockSig: string;
+  buyerPrivateKeyHex: string;
 }
 
 export interface ReleaseOrderResponse {
   order: ApiOrder;
+  redeemedSats: number;
+  /** Backend-generated reference for receipts (e.g. "cashu_SS-7421"). */
+  txRef: string;
 }
 
+/** `POST /api/orders/:token/ship` — seller-side. */
+export interface ShipOrderRequest {
+  trackingNumber?: string;
+  carrier?: string;
+}
+
+export interface ShipOrderResponse {
+  order: ApiOrder;
+}
+
+/** `POST /api/orders/:token/dispute` */
 export interface OpenDisputeRequest {
-  reason:
-    | "wrong_item"
-    | "damaged"
-    | "not_as_described"
-    | "not_received"
-    | "return_request";
-  description: string;
-  /** Blossom / nostr.build URLs of evidence already uploaded. */
-  evidence: string[];
+  reason: string;
+  summary?: string;
+  openedBy: "buyer" | "seller";
 }
 
 export interface OpenDisputeResponse {
   order: ApiOrder;
-  dispute: {
-    id: string;
-    status:
-      | "open"
-      | "direct_resolution"
-      | "escalated"
-      | "evidence_requested"
-      | "resolved";
-    openedAt: string;
-  };
+  dispute: ApiDispute;
 }
