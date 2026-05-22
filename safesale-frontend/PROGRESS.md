@@ -24,21 +24,23 @@
 
 ## The 9 core screens
 
-Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ next · ⬜ pending
+Legend: ✅ done (designed + wired to live backend) · 🟡 in-progress · ⏭ next · ⬜ pending
 
 | # | Screen | Route | Audience | Status | Notes |
 |---|---|---|---|---|---|
-| 1 | Seller Onboarding | `/onboarding` | New seller | ✅ | Stitch HTML in `.stitch-designs/01-onboarding.html` |
-| 2 | Seller Dashboard Home | `/app` | Seller | 🟡 | Stitch prompt sent (`.stitch-designs/02-seller-dashboard.prompt.md`), awaiting HTML |
-| 3 | Seller Listings (list + create) | `/app/listings` | Seller | ⬜ | |
-| 4 | Seller Orders (list + detail with "Mark Shipped") | `/app/orders` & `/app/orders/:id` | Seller | ⬜ | |
-| 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | |
-| 6 | Public Listing | `/buy/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/06-public-listing.html` → React in `src/pages/PublicListing.tsx`; wired to `useListing` (Nostr kind 30018 → fixture fallback for cold demos) |
-| 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/03-checkout.html` |
+| 1 | Seller Onboarding | `/onboarding` | New seller | ✅ | Stitch HTML in `.stitch-designs/01-onboarding.html` → React in `src/pages/Onboarding.tsx`; wired to `apiClient.createSeller` (POST /api/sellers) before the Nostr login is persisted, so duplicate-handle 409s surface cleanly. Stores the returned seller record via `useCurrentSeller`. Phone field is required (backend Zod minimum). |
+| 2 | Seller Dashboard Home | `/app` | Seller | ✅ | Stitch HTML in `.stitch-designs/02-seller-dashboard.html` → React in `src/pages/app/DashboardHome.tsx`; KPIs (locked in escrow / paid out 7d / orders to ship / active listings) computed off `useSellerOrders` (GET /api/orders/seller/:npub, 15s poll) + `useMyListings`. "Needs your attention" surfaces payment_locked + disputed rows oldest-first. Reputation strip is placeholder until kind 1985 review feed is wired. |
+| 3 | Seller Listings (list + create) | `/app/listings` | Seller | 🟡 | React component exists (`src/pages/app/ListingsPage.tsx`). Create-listing flow wired to `apiClient.createListing` (POST /api/listings) → uses the backend cuid as the Nostr kind 30018 `d` tag so /buy/:id and POST /api/orders agree. **Design hasn't been ported from a Stitch prompt yet — page still uses the original look.** |
+| 4 | Seller Orders (list + detail) | `/app/orders` & `/app/orders/:token` | Seller | 🟡 | Detail page (`src/pages/app/OrderDetailPage.tsx`) fully wired: `apiClient.getOrder` (8s poll) + Mark Shipped → `apiClient.shipOrder`. **OrdersPage list view still reads `lib/mock.ts` — needs to switch to `useSellerOrders`.** Both need Stitch prompts + design pass. |
+| 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | React component exists but is a mock-fed stub. Backend has no /api/earnings endpoint yet; this screen is blocked on a Phase 8+ backend wire. |
+| 6 | Public Listing | `/buy/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/06-public-listing.html` → React in `src/pages/PublicListing.tsx`; wired to `useListing` (Nostr kind 30018 → fixture fallback for cold demos). |
+| 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/03-checkout.html` → React in `src/pages/Checkout.tsx`; wired to `apiClient.createOrder` + polling. |
 | 8 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ✅ | Stitch HTML in `.stitch-designs/08-buyer-order.html` → React in `src/pages/BuyerOrder.tsx`; wired to `apiClient.getOrder` (8s poll), `apiClient.releaseOrder` (signs with nsec from localStorage), `apiClient.openDispute`. 7-state hero, 4-step timeline, mobile sticky action bar. |
-| 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | |
+| 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | Not designed, not wired. Blocked on backend kind 33889 mediator publishing being live. |
 
-**Progress: 4 / 9 complete.**
+**Status: 6 / 9 screens design-complete + buyer-flow wired; 2 / 9 partially wired (3, 4); 1 / 9 pending (5, 9 separately).**
+
+The escrow wedge — onboard → list → buy → pay → ship → release — runs end-to-end on Railway today.
 
 ### Deferred (not part of the 9 — polish or build later)
 
@@ -51,26 +53,44 @@ Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ 
 
 ---
 
-## Wiring track — making the buyer slice real
+## Wiring track — backend integration status
 
-Pages can look right and still do nothing real. The wiring track runs in parallel with the redesign track and replaces mock data with the backend defined in `BACKEND.md` + the Nostr event spec in `NIP.md`.
+The buyer slice is fully wired against the live Railway backend
+(`https://safe-sales-backend-production.up.railway.app`). Seller wires
+landed during Phase 8 step A–D. Switching modes between mock and real
+is still a one-line env-var flip via `VITE_API_URL`.
 
-### Mock → real mapping (buyer slice)
+### What's wired (verified against Railway)
 
-| Today (mock) | Tomorrow (BACKEND.md + NIP.md) |
-|---|---|
-| `getListing(id)` from `lib/mock.ts` | Nostr query `{kinds:[30018], '#d':[id]}` → `useListing(id)` |
-| `getSeller(id)` | `useAuthor(pubkey)` (existing) |
-| `getReviewsForSeller(id)` | Nostr `{kinds:[1985], '#L':['safesale.review'], '#p':[seller]}` |
-| `getOrderByToken(token)` | `GET /api/orders/:token` + `{kinds:[33888], '#d':[token], authors:[ESCROW_NPUB]}` |
-| `generateOrderToken()` in browser | Backend returns it in `POST /api/orders` response |
-| Checkout `setTimeout` payment-detected simulation | Bitnob webhook → backend mints + publishes 33888 update → frontend re-renders |
-| `getDisputeForOrder()` | `{kinds:[33889], '#a':[order-coord], authors:[MEDIATOR_NPUB]}` |
-| Buyer release dialog (no-op) | `POST /api/orders/:token/release` with P2PK schnorr sig from `useEscrowToken.release()` |
+| Frontend call | Backend route | Where wired | Commit |
+|---|---|---|---|
+| `apiClient.createSeller` | POST /api/sellers | `src/pages/Onboarding.tsx` | `b4a252a` |
+| `apiClient.createListing` | POST /api/listings | `src/pages/app/ListingsPage.tsx` (`CreateListingSheet.onPublish`) | `f36719f` |
+| `apiClient.shipOrder` | POST /api/orders/:token/ship | `src/pages/app/OrderDetailPage.tsx` (`shipMutation`) | `5403562` |
+| `apiClient.getSellerOrders` | GET /api/orders/seller/:npub | `src/hooks/useSellerOrders.ts` → `DashboardHome` | `071d25e` |
+| `apiClient.createOrder` | POST /api/orders | `src/pages/Checkout.tsx` | (pre Phase 8) |
+| `apiClient.getOrder` | GET /api/orders/:token | `src/pages/BuyerOrder.tsx`, `OrderDetailPage` | (pre Phase 8) |
+| `apiClient.releaseOrder` | POST /api/orders/:token/release | `BuyerOrder.tsx` (`releaseMutation`) | (pre Phase 8) |
+| `apiClient.openDispute` | POST /api/orders/:token/dispute | `BuyerOrder.tsx` (`disputeMutation`) | (pre Phase 8) |
 
-### Backend availability
+### Still on mock data (won't break demos — they're read paths only)
 
-The backend lives on `origin/backend` and is being built in parallel. No staging URL yet. Strategy: build a typed API client in `src/lib/api/` shaped to `BACKEND.md`. When `VITE_API_URL` is set we hit the real backend; when unset we return canned responses derived from the existing mocks. Switching modes is a one-line env change.
+| Frontend call | Backend route to add | Where used | Notes |
+|---|---|---|---|
+| `getOrdersForSeller` etc. on `OrdersPage` | GET /api/orders/seller/:npub | `src/pages/app/OrdersPage.tsx` | List view; same endpoint the dashboard already uses. Trivial wire — just hasn't been done yet. |
+| `payouts` / `earnings` from `lib/mock.ts` | (not designed yet) | `src/pages/app/EarningsPage.tsx` | Blocked on backend endpoints — no /api/earnings yet. |
+| Dispute / return / review cards | kinds 33889, 1985 (Nostr) | `OrderDetailPage`, `BuyerOrder` (review prompt) | Removed from seller order detail in commit `5403562`; will return when 33889 + 1985 are live. |
+| `currentSeller` fixture default | n/a | `lib/api/mocks.ts` cold-demo fallback | Only used when `VITE_API_URL` is unset. Safe. |
+
+### Refactor pass before launch
+
+Once every screen is wired, do one cleanup commit:
+- Delete every `import { ... } from "@/lib/mock"` outside `src/lib/api/mocks.ts`.
+- Delete the entire `currentSeller` / `orders` / `listings` exports from `lib/mock.ts` once nothing references them.
+- Remove the seeded fixture in `lib/mock.ts` (commit `fd6ff2d`) that points at the manually-curl'd Railway listing — the create-listing flow now produces real listings.
+- Refactor / consolidate the `ListingThumb` helper duplicated in `BuyerOrder.tsx` and `OrderDetailPage.tsx`.
+- Drop `lib/buyerKey` exports that aren't called anywhere.
+- Audit `PROGRESS.md` itself — when 9/9 are done, this file should compress to a single "ship state" paragraph, not a sprawling tracker.
 
 ---
 
@@ -81,10 +101,14 @@ Raw HTML from Stitch is committed to `.stitch-designs/` so we never lose a desig
 | Screen | Prompt | HTML output |
 |---|---|---|
 | 1 — Seller Onboarding | _(prompt not archived; predates convention)_ | `.stitch-designs/01-onboarding.html` |
+| 2 — Seller Dashboard Home | `.stitch-designs/02-seller-dashboard.prompt.md` | `.stitch-designs/02-seller-dashboard.html` |
 | 6 — Public Listing | `.stitch-designs/06-public-listing.prompt.md` | `.stitch-designs/06-public-listing.html` |
 | 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/03-checkout.html` (numbered from old ordering; safe to rename when next file lands) |
 | 8 — Buyer Order Page | `.stitch-designs/08-buyer-order.prompt.md` | `.stitch-designs/08-buyer-order.html` |
-| 2 — Seller Dashboard Home | `.stitch-designs/02-seller-dashboard.prompt.md` | _(awaiting Stitch)_ |
+| 3 — Seller Listings | _(awaiting prompt)_ | _(awaiting Stitch)_ |
+| 4 — Seller Orders (list + detail) | _(awaiting prompt)_ | _(awaiting Stitch)_ |
+| 5 — Seller Earnings | _(awaiting prompt)_ | _(awaiting Stitch)_ |
+| 9 — Admin Dispute Dashboard | _(awaiting prompt)_ | _(awaiting Stitch)_ |
 
 ---
 
