@@ -68,6 +68,32 @@ export const sellers: Seller[] = [
 
 export const listings: Listing[] = [
   {
+    // Demo listing seeded on the Railway backend (Phase 7).
+    // The id is the Prisma cuid returned by POST /api/listings, so when
+    // `useListing` falls back to fixtures the buyer flow still finds it
+    // AND `POST /api/orders { listingId }` resolves on the backend —
+    // letting collaborators run the full buyer/escrow flow end-to-end
+    // without seeding their own data. Safe to delete once seller-side
+    // create-listing is wired to POST /api/listings.
+    id: "cmph7pvyr0002lk1cgz14mckh",
+    sellerId: "seller_amaka",
+    title: "Vintage Denim Jacket (demo seed)",
+    description:
+      "Lightly worn vintage Levi denim jacket, size M. Perfect condition, no rips. This listing exists on the live Railway backend; ordering it runs the real Cashu escrow flow.",
+    priceNGN: 28500,
+    images: [
+      { seed: "demo-denim-jacket", hueA: 210, hueB: 220, label: "Front" },
+    ],
+    inStock: 1,
+    category: "Fashion",
+    variants: ["One size — M"],
+    delivery: "Lagos pickup or GIG nationwide",
+    views: 0,
+    saves: 0,
+    createdAt: iso(0),
+    active: true,
+  },
+  {
     id: "lst_jacket01",
     sellerId: "seller_amaka",
     title: "Vintage Denim Jacket — Ralph Lauren",
