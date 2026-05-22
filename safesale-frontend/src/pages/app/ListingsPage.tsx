@@ -47,10 +47,13 @@ import {
 import { cn, sanitizeUrl } from "@/lib/utils";
 import { formatNGN } from "@/lib/format";
 import { useToast } from "@/hooks/useToast";
+import { useCurrentSeller } from "@/hooks/useCurrentSeller";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useNostrPublish } from "@/hooks/useNostrPublish";
 import { useUploadFile } from "@/hooks/useUploadFile";
 import { useMyListings, type MyListing } from "@/hooks/useMyListings";
+import { apiClient } from "@/lib/api";
+import { ApiError } from "@/lib/api/errors";
 
 /* -------------------------------------------------------------------------- */
 /*                                  Page                                      */
@@ -399,6 +402,7 @@ function CreateListingSheet({
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { user } = useCurrentUser();
+  const [currentSeller] = useCurrentSeller();
   const { mutateAsync: publish, isPending: isPublishing } = useNostrPublish();
   const { mutateAsync: uploadFile } = useUploadFile();
 
@@ -407,6 +411,11 @@ function CreateListingSheet({
   const [description, setDescription] = useState("");
   const [photos, setPhotos] = useState<PendingPhoto[]>([]);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Tracks the backend round-trip independently of the Nostr publish.
+   * The publish button must be disabled across both phases.
+   */
+  const [isSavingToBackend, setIsSavingToBackend] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Reset state when the sheet closes
@@ -436,7 +445,8 @@ function CreateListingSheet({
     Number(price) > 0 &&
     uploadedPhotos.length > 0 &&
     !stillUploading &&
-    !isPublishing;
+    !isPublishing &&
+    !isSavingToBackend;
 
   const onFilesPicked = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -510,21 +520,78 @@ function CreateListingSheet({
   const onPublish = async () => {
     if (!canPublish || !user) return;
     setError(null);
-    const id =
-      typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : Math.random().toString(36).slice(2);
-    const priceNGN = Number(price);
-    const now = Math.floor(Date.now() / 1000);
 
-    // Build kind 30018 tags per NIP.md §49-99
+    if (!currentSeller) {
+      // Belt-and-braces: the seller dashboard route should never be
+      // reachable without a registered seller, but if someone clears
+      // localStorage mid-session we surface a clean message instead of
+      // a backend 400.
+      const msg =
+        "Your shop isn't fully set up. Sign out and create your shop again to fix this.";
+      setError(msg);
+      toast({
+        title: "Shop not set up",
+        description: msg,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const priceNGN = Number(price);
+    const trimmedTitle = title.trim();
+    const trimmedDescription = description.trim();
+
+    setIsSavingToBackend(true);
+
+    // 1. Create the listing on the backend FIRST so we have its cuid.
+    //    The cuid is what /buy/:id and POST /api/orders { listingId }
+    //    both key off — using it as the Nostr `d` tag keeps the two
+    //    worlds in sync without a translation table.
+    let backendListingId: string;
+    try {
+      const { listing } = await apiClient.createListing({
+        sellerNpub: currentSeller.npub,
+        title: trimmedTitle,
+        description: trimmedDescription,
+        priceNGN,
+        // Backend Zod accepts `{ url, alt? }` or `{ seed, alt? }`. We
+        // upload to Blossom first so every image has a real URL — no
+        // seed-based placeholders for seller-authored listings.
+        images: uploadedPhotos.map((p) => ({ url: p.uploadedUrl })),
+        // The current sheet doesn't capture a category. "General" passes
+        // the backend's Zod min(2). When the sheet grows a category
+        // picker, swap this for the picked value.
+        category: "General",
+        inStock: 1,
+      });
+      backendListingId = listing.id;
+    } catch (err) {
+      setIsSavingToBackend(false);
+      const msg =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Couldn't save your listing on SafeSale's servers.";
+      setError(msg);
+      toast({
+        title: "Publish failed",
+        description: msg,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // 2. Publish to Nostr using the backend cuid as the `d` tag.
+    //    Per NIP.md §49-99 (kind 30018, NIP-15 marketplace listing).
+    const now = Math.floor(Date.now() / 1000);
     const tags: string[][] = [
-      ["d", id],
-      ["title", title.trim()],
+      ["d", backendListingId],
+      ["title", trimmedTitle],
       ["price", String(priceNGN), "NGN"],
       ["published_at", String(now)],
       ["stock", "1"],
-      ["r", buyUrlFor(id)],
+      ["r", buyUrlFor(backendListingId)],
     ];
     for (const photo of uploadedPhotos) {
       tags.push(["image", photo.uploadedUrl]);
@@ -533,14 +600,14 @@ function CreateListingSheet({
     try {
       const event = await publish({
         kind: 30018,
-        content: description.trim(),
+        content: trimmedDescription,
         tags,
         created_at: now,
       });
 
       toast({
         title: "Listing published",
-        description: "It's live on Nostr — share the link to start selling.",
+        description: "It's live on SafeSale — share the link to start selling.",
       });
 
       // Force the seller's listings grid to refresh, but in case the
@@ -551,9 +618,9 @@ function CreateListingSheet({
       });
 
       const optimistic: MyListing = {
-        id,
-        title: title.trim(),
-        description: description.trim(),
+        id: backendListingId,
+        title: trimmedTitle,
+        description: trimmedDescription,
         priceNGN,
         images: uploadedPhotos.map((p) => p.uploadedUrl),
         inStock: 1,
@@ -561,17 +628,23 @@ function CreateListingSheet({
         event,
       };
       onClose();
+      setIsSavingToBackend(false);
       // Open the share dialog after the sheet has closed
       setTimeout(() => onPublished(optimistic), 250);
     } catch (err) {
+      // The backend row was created but the Nostr broadcast failed.
+      // That's actually fine for buyer flow — useListing falls back to
+      // the API. We log a softer error and still surface the listing.
       const msg =
         err instanceof Error
           ? err.message
-          : "Couldn't publish your listing right now. Try again.";
+          : "Saved on SafeSale, but couldn't broadcast on Nostr.";
+      setIsSavingToBackend(false);
       setError(msg);
       toast({
-        title: "Publish failed",
-        description: msg,
+        title: "Published on SafeSale, not on Nostr",
+        description:
+          "Your listing is live and orderable. Nostr broadcast failed — buyers will see it via the SafeSale link.",
         variant: "destructive",
       });
     }
@@ -729,7 +802,12 @@ function CreateListingSheet({
               size="lg"
               className="h-12 w-full rounded-lg bg-brand text-base font-semibold text-brand-foreground hover:bg-brand/90 disabled:opacity-50"
             >
-              {isPublishing ? (
+              {isSavingToBackend ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving listing…
+                </>
+              ) : isPublishing ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Publishing to Nostr…
