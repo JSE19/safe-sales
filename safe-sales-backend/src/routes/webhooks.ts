@@ -40,8 +40,10 @@ const BitnobWebhookSchema = z.object({
  *      can ONLY be redeemed by the buyer's private key
  *   4. The seller receives an encrypted Nostr DM telling them to ship
  *
- * If Cashu mint or Nostr DM fails, we still advance the order status
- * (the buyer paid; we shouldn't strand them). Errors are logged for ops.
+ * If the Cashu mint fails we DO NOT advance the order status — the
+ * webhook caller (Bitnob) will retry. Advancing status without a token
+ * was a previous bug that left orders in a "locked but no token" state
+ * which broke release. Nostr DM failure is non-fatal (logged only).
  */
 export async function markOrderPaymentLocked(
   orderToken: string,
@@ -66,27 +68,38 @@ export async function markOrderPaymentLocked(
   }
 
   // Mint + P2PK-lock the Cashu token. This is the cryptographic escrow.
-  let cashuToken: string | null = null;
+  // If this throws, we let it propagate — caller (Bitnob webhook) will
+  // see a 5xx and retry. We do NOT advance the order status because
+  // doing so without a token leaves the buyer with a redeem that 400s.
+  let cashuToken: string;
   try {
     cashuToken = await mintLockedToken(order.amountSats, order.buyerPubkey);
   } catch (err) {
     logger.error(
-      { orderId: order.id, err: err instanceof Error ? err.message : err },
-      'Cashu mint failed — order will be flagged for ops review',
+      {
+        orderId: order.id,
+        orderToken: order.orderToken,
+        amountSats: order.amountSats,
+        err: err instanceof Error ? err.message : err,
+        stack: err instanceof Error ? err.stack : undefined,
+      },
+      'Cashu mint failed — order remains in pending_payment, webhook should retry',
     );
-    // We still advance status: the buyer paid NGN, we owe them a token.
-    // Ops can re-mint later by calling /api/dev/simulate-payment again.
+    throw new Error(
+      `Cashu mint failed: ${err instanceof Error ? err.message : 'unknown'}`,
+    );
   }
 
   const updated = await prisma.order.update({
     where: { id: order.id },
     data: {
       status: 'payment_locked',
-      ...(cashuToken && { cashuToken }),
+      cashuToken,
     },
   });
 
-  // Notify the seller via encrypted Nostr DM (best-effort)
+  // Notify the seller via encrypted Nostr DM (best-effort — DM failure
+  // is non-fatal; the order is locked and the buyer can still release).
   try {
     const message =
       `New order on SafeSale: "${order.listing.title}" — ` +

@@ -114,9 +114,20 @@ async function main() {
 
   // ---- Step 0: pre-flight health check ---------------------------------
   log.step(0, 'Health check');
-  const health = await http<{ ok: boolean; service: string }>('GET', '/health');
-  expectOk('GET /health', health);
+  const health = await http<{ ok: boolean; service: string; env: string }>(
+    'GET',
+    '/health',
+  );
+  const healthBody = expectOk('GET /health', health);
   log.ok(`Server responding (${JSON.stringify(health.body)})`);
+
+  // Production deploys disable /api/dev/simulate-payment (intentional —
+  // see src/routes/dev.ts). Route Step 4 through the real Bitnob webhook
+  // in that case so the smoke still works end-to-end.
+  const isProduction = healthBody.env === 'production';
+  if (isProduction) {
+    log.info('production env detected — Step 4 will use /api/webhooks/bitnob');
+  }
 
   // ---- Step 0.5: generate fresh keypairs -------------------------------
   const sellerSk = generateSecretKey();
@@ -194,19 +205,64 @@ async function main() {
 
   // ---- Step 4: simulate Bitnob payment ---------------------------------
   log.step(4, 'Simulate Bitnob credit → Cashu mint + P2PK lock + DM seller');
-  log.info('this calls the same handler the real Bitnob webhook would');
-  const payRes = await http<{
-    ok: boolean;
-    status: string;
-    simulatedAmountNGN: number;
-  }>('POST', '/api/dev/simulate-payment', { orderToken: token });
-  const pay = expectOk('POST /api/dev/simulate-payment', payRes);
-  if (pay.status !== 'payment_locked') {
-    log.fail(`Expected status="payment_locked", got "${pay.status}"`);
-    process.exit(1);
+  if (isProduction) {
+    // Production: hit the real webhook endpoint with a synthetic Bitnob
+    // payload. Same handler (markOrderPaymentLocked) as the dev shortcut.
+    log.info('POST /api/webhooks/bitnob with synthetic payload');
+    const webhookRes = await http<{
+      ok: boolean;
+      status: string;
+      orderId: string;
+    }>('POST', '/api/webhooks/bitnob', {
+      event: 'wallet.credit',
+      data: {
+        reference: token,
+        amount: order.amountNGN,
+        metadata: { orderToken: token },
+      },
+    });
+    const webhook = expectOk('POST /api/webhooks/bitnob', webhookRes);
+    if (webhook.status !== 'payment_locked') {
+      log.fail(`Expected status="payment_locked", got "${webhook.status}"`);
+      process.exit(1);
+    }
+  } else {
+    log.info('POST /api/dev/simulate-payment (dev-only convenience endpoint)');
+    const payRes = await http<{
+      ok: boolean;
+      status: string;
+      simulatedAmountNGN: number;
+    }>('POST', '/api/dev/simulate-payment', { orderToken: token });
+    const pay = expectOk('POST /api/dev/simulate-payment', payRes);
+    if (pay.status !== 'payment_locked') {
+      log.fail(`Expected status="payment_locked", got "${pay.status}"`);
+      process.exit(1);
+    }
   }
   log.ok(
     `Payment locked. Cashu token minted at the mint and P2PK-locked to buyer's npub.`,
+  );
+
+  // Sanity: verify the order actually has a cashuToken now. Without this
+  // check, a swallowed mint failure (webhooks.ts catches errors so the
+  // buyer doesn't strand) would silently break Steps 6 and 7 with a
+  // confusing "Order has no Cashu token" instead of a real witness error.
+  const afterMintRes = await http<{
+    order: { status: string; cashuToken: string | null };
+  }>('GET', `/api/orders/${token}`);
+  const afterMint = expectOk(
+    `GET /api/orders/${token} (post-mint sanity)`,
+    afterMintRes,
+  );
+  if (!afterMint.order.cashuToken) {
+    log.fail(
+      'Order status advanced to payment_locked but cashuToken is null. ' +
+        'The Cashu mint failed silently. Check server logs for "Cashu mint failed".',
+    );
+    process.exit(1);
+  }
+  log.ok(
+    `cashuToken populated (${afterMint.order.cashuToken.length} chars) — mint succeeded for real.`,
   );
 
   // ---- Step 5: seller marks shipped ------------------------------------

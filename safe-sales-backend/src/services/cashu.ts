@@ -224,20 +224,26 @@ export async function redeemLockedToken(
 
 /**
  * Poll the mint until the quote is marked PAID, with a timeout.
- * On testnut.cashu.space this resolves in <1 second (mint auto-pays).
- * On mainnet it would block waiting for a real LN payment.
+ * On testnut.cashu.space this normally resolves in <1 second, but cold
+ * Railway containers can take 10–20s for the first request, so the
+ * timeout is generous. On mainnet it would block waiting for a real
+ * LN payment (which we'd handle differently).
  */
 async function waitForQuotePaid(
   wallet: CashuWallet,
   quoteId: string,
-  timeoutMs = 10_000,
-  intervalMs = 250,
+  timeoutMs = 30_000,
+  intervalMs = 500,
 ): Promise<void> {
   const start = Date.now();
+  let lastState: string | undefined;
   while (Date.now() - start < timeoutMs) {
     const state = await wallet.checkMintQuote(quoteId);
+    lastState = state.state;
     if (state.state === 'PAID' || state.state === 'ISSUED') return;
     await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new Error(`Mint quote ${quoteId} not paid within ${timeoutMs}ms`);
+  throw new Error(
+    `Mint quote ${quoteId} not paid within ${timeoutMs}ms (last state: ${lastState ?? 'unknown'})`,
+  );
 }
