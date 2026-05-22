@@ -30,7 +30,7 @@ Legend: ✅ done (designed + wired to live backend) · 🟡 in-progress · ⏭ n
 |---|---|---|---|---|---|
 | 1 | Seller Onboarding | `/onboarding` | New seller | ✅ | Stitch HTML in `.stitch-designs/01-onboarding.html` → React in `src/pages/Onboarding.tsx`; wired to `apiClient.createSeller` (POST /api/sellers) before the Nostr login is persisted, so duplicate-handle 409s surface cleanly. Stores the returned seller record via `useCurrentSeller`. Phone field is required (backend Zod minimum). |
 | 2 | Seller Dashboard Home | `/app` | Seller | ✅ | Stitch HTML in `.stitch-designs/02-seller-dashboard.html` → React in `src/pages/app/DashboardHome.tsx`; KPIs (locked in escrow / paid out 7d / orders to ship / active listings) computed off `useSellerOrders` (GET /api/orders/seller/:npub, 15s poll) + `useMyListings`. "Needs your attention" surfaces payment_locked + disputed rows oldest-first. Reputation strip is placeholder until kind 1985 review feed is wired. |
-| 3 | Seller Listings (list + create) | `/app/listings` | Seller | 🟡 | React component exists (`src/pages/app/ListingsPage.tsx`). Create-listing flow wired to `apiClient.createListing` (POST /api/listings) → uses the backend cuid as the Nostr kind 30018 `d` tag so /buy/:id and POST /api/orders agree. **Design hasn't been ported from a Stitch prompt yet — page still uses the original look.** |
+| 3 | Seller Listings (list + create) | `/app/listings` | Seller | ✅ | Stitch HTML in `.stitch-designs/03-seller-listings.html` → React in `src/pages/app/ListingsPage.tsx`. Snapshot strip + search/filter chips + 3-col card grid + mobile FAB. Create-listing wired to `apiClient.createListing` (POST /api/listings) since Phase 8 step B — backend cuid round-trips as the Nostr kind 30018 `d` tag. Edit + Mark out-of-stock surfaced as friendly "coming soon" toasts (backend has no PATCH /api/listings/:id yet — wires the moment that route ships). |
 | 4 | Seller Orders (list + detail) | `/app/orders` & `/app/orders/:token` | Seller | 🟡 | List view (`src/pages/app/OrdersPage.tsx`) now wired to `useSellerOrders` — agrees with the dashboard. Detail page (`src/pages/app/OrderDetailPage.tsx`) wired: `apiClient.getOrder` (8s poll) + Mark Shipped → `apiClient.shipOrder`. **Both still need a Stitch prompt + design pass.** |
 | 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | React component exists but is a mock-fed stub. Backend has no /api/earnings endpoint yet; this screen is blocked on a Phase 8+ backend wire. |
 | 6 | Public Listing | `/buy/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/06-public-listing.html` → React in `src/pages/PublicListing.tsx`; wired to `useListing` (Nostr kind 30018 → fixture fallback for cold demos). |
@@ -38,7 +38,7 @@ Legend: ✅ done (designed + wired to live backend) · 🟡 in-progress · ⏭ n
 | 8 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ✅ | Stitch HTML in `.stitch-designs/08-buyer-order.html` → React in `src/pages/BuyerOrder.tsx`; wired to `apiClient.getOrder` (8s poll), `apiClient.releaseOrder` (signs with nsec from localStorage), `apiClient.openDispute`. 7-state hero, 4-step timeline, mobile sticky action bar. |
 | 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | Not designed, not wired. Blocked on backend kind 33889 mediator publishing being live. |
 
-**Status: 6 / 9 screens design-complete + buyer-flow wired; 2 / 9 partially wired (3, 4); 1 / 9 pending (5, 9 separately).**
+**Status: 7 / 9 screens design-complete + wired; 1 / 9 partially wired (4 — detail done, list view wired but unique design pending); 2 / 9 pending (5 Earnings, 9 Admin).**
 
 The escrow wedge — onboard → list → buy → pay → ship → release — runs end-to-end on Railway today.
 
@@ -77,7 +77,8 @@ is still a one-line env-var flip via `VITE_API_URL`.
 
 | Frontend call | Backend route to add | Where used | Notes |
 |---|---|---|---|
-| `getOrdersForSeller` etc. on `OrdersPage` | GET /api/orders/seller/:npub | `src/pages/app/OrdersPage.tsx` | ✅ Wired in commit `<pending>`. Same `useSellerOrders` query as the dashboard — both surfaces refresh together. |
+| `getOrdersForSeller` etc. on `OrdersPage` | GET /api/orders/seller/:npub | `src/pages/app/OrdersPage.tsx` | ✅ Wired in commit `c8a8394`. Same `useSellerOrders` query as the dashboard — both surfaces refresh together. |
+| Edit listing + mark-out-of-stock toggle | PATCH /api/listings/:id (NEW route — not on backend yet) | `src/pages/app/ListingsPage.tsx` ListingCard More menu | Frontend surfaces both as friendly "coming soon" toasts so the seller knows they're real-but-not-yet-wired. One-line `apiClient.updateListing` mutation + Nostr republish (same `d` tag) when the backend route lands. |
 | `payouts` / `earnings` from `lib/mock.ts` | (not designed yet) | `src/pages/app/EarningsPage.tsx` | Blocked on backend endpoints — no /api/earnings yet. |
 | Dispute / return / review cards | kinds 33889, 1985 (Nostr) | `OrderDetailPage`, `BuyerOrder` (review prompt) | Removed from seller order detail in commit `5403562`; will return when 33889 + 1985 are live. |
 | `currentSeller` fixture default | n/a | `lib/api/mocks.ts` cold-demo fallback | Only used when `VITE_API_URL` is unset. Safe. |
@@ -140,7 +141,7 @@ Raw HTML from Stitch is committed to `.stitch-designs/` so we never lose a desig
 | 2 — Seller Dashboard Home | `.stitch-designs/02-seller-dashboard.prompt.md` | `.stitch-designs/02-seller-dashboard.html` |
 | 6 — Public Listing | `.stitch-designs/06-public-listing.prompt.md` | `.stitch-designs/06-public-listing.html` |
 | 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/07-buyer-checkout.html` (renamed from `03-checkout.html` once canonical numbering stabilised) |
-| 3 — Seller Listings | `.stitch-designs/03-seller-listings.prompt.md` | _(awaiting Stitch)_ |
+| 3 — Seller Listings | `.stitch-designs/03-seller-listings.prompt.md` | `.stitch-designs/03-seller-listings.html` |
 | 4 — Seller Orders (list + detail) | _(awaiting prompt)_ | _(awaiting Stitch)_ |
 | 5 — Seller Earnings | _(awaiting prompt)_ | _(awaiting Stitch)_ |
 | 9 — Admin Dispute Dashboard | _(awaiting prompt)_ | _(awaiting Stitch)_ |
