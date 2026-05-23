@@ -56,6 +56,7 @@ import { Link } from "react-router-dom";
 
 import { AppShell } from "@/components/safesale/AppShell";
 import { EscrowStatusPill } from "@/components/safesale/EscrowStatus";
+import { ListingThumb } from "@/components/safesale/ListingThumb";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -64,7 +65,6 @@ import {
   Building2,
   CheckCircle2,
   Clock,
-  Package,
   ShieldCheck,
   TrendingUp,
   Wallet,
@@ -73,9 +73,8 @@ import {
 import { useCurrentSeller } from "@/hooks/useCurrentSeller";
 import { useSellerOrders } from "@/hooks/useSellerOrders";
 import { useToast } from "@/hooks/useToast";
-import type { ApiListingImage, SellerOrderRow } from "@/lib/api";
+import type { SellerOrderRow } from "@/lib/api";
 import { formatNGN, formatRelative } from "@/lib/format";
-import { sanitizeUrl } from "@/lib/utils";
 
 /* ----------------------------------------------------------------------- */
 /*                                Page                                     */
@@ -490,49 +489,6 @@ function PayoutMobile({ order }: { order: SellerOrderRow }) {
       </div>
     </li>
   );
-}
-
-function ListingThumb({
-  image,
-  alt,
-  size,
-}: {
-  image: ApiListingImage | undefined;
-  alt: string;
-  size: number;
-}) {
-  const url = image?.url ? sanitizeUrl(image.url) : undefined;
-  const dim = { width: size, height: size };
-  if (url) {
-    return (
-      <img
-        src={url}
-        alt={alt}
-        loading="lazy"
-        className="shrink-0 rounded-xl object-cover"
-        style={dim}
-      />
-    );
-  }
-  const seed = image?.seed ?? alt;
-  return (
-    <div
-      aria-hidden
-      className="flex shrink-0 items-center justify-center rounded-xl bg-surface text-ink-soft"
-      style={{
-        ...dim,
-        background: `linear-gradient(135deg, hsl(${((hash(seed) % 360) + 360) % 360} 35% 88%), hsl(${(((hash(seed) * 7) % 360) + 360) % 360} 30% 80%))`,
-      }}
-    >
-      <Package className="h-4 w-4 opacity-60" />
-    </div>
-  );
-}
-
-function hash(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  return h;
 }
 
 /* ----------------------------------------------------------------------- */

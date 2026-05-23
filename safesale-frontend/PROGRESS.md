@@ -63,7 +63,7 @@ The simplest sync (recommended): after pushing today's commits to `frontend`, ru
 
 **Day 3 — polish, deploy, dry-run**
 
-- [ ] **Morning polish pass (~2 hrs total):** consolidate the 4 inlined `ListingThumb` helpers into one shared component (PROGRESS.md "Refactor pass before launch" line 92); add a global TanStack Query error boundary; audit every mutation button for visible `Loader2` state; remove any stray `console.log`.
+- [x] **Morning polish pass (~2 hrs total):** consolidated the 4 inlined `ListingThumb` helpers into one shared component (PROGRESS.md "Refactor pass before launch" line 92); added a global TanStack Query error boundary; audited every mutation button for visible `Loader2` state; removed stray `console.log`.
 - [ ] **Deploy to Vercel** with `VITE_API_URL` pointing at Railway. Tell Joy to append the Vercel URL to her `FRONTEND_ORIGINS` env var (one Railway env change on her side; per her STATE.md).
 - [ ] **Full dry-run with Joy on video call** — run + record the demo end-to-end on the deployed URL. Time it. Anything >5 min, cut. Identify any remaining UX issue, fix that evening.
 - [ ] **Evening: open + merge `frontend → main` and `backend → main` PRs together.** Tag `hack4freedom-submission-v1` on `main`.
@@ -182,7 +182,7 @@ Once every screen is wired, do one cleanup commit:
 - Delete every `import { ... } from "@/lib/mock"` outside `src/lib/api/mocks.ts`.
 - Delete the entire `currentSeller` / `orders` / `listings` exports from `lib/mock.ts` once nothing references them.
 - Remove the seeded fixture in `lib/mock.ts` (commit `fd6ff2d`) that points at the manually-curl'd Railway listing — the create-listing flow now produces real listings.
-- Refactor / consolidate the `ListingThumb` helper duplicated in `BuyerOrder.tsx` and `OrderDetailPage.tsx`.
+- [x] Refactor / consolidate the `ListingThumb` helper duplicated in `BuyerOrder.tsx` and `OrderDetailPage.tsx`.
 - Drop `lib/buyerKey` exports that aren't called anywhere.
 - Audit `PROGRESS.md` itself — when 9/9 are done, this file should compress to a single "ship state" paragraph, not a sprawling tracker.
 

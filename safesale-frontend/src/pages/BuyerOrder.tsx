@@ -70,6 +70,7 @@ import {
 
 import { Logo } from "@/components/safesale/Logo";
 import { Avatar } from "@/components/safesale/Avatar";
+import { ListingThumb } from "@/components/safesale/ListingThumb";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -90,7 +91,6 @@ import {
   ApiError,
   type ApiDispute,
   type ApiListing,
-  type ApiListingImage,
   type ApiOrder,
   type ApiOrderStatus,
   type ApiSeller,
@@ -102,7 +102,7 @@ import {
   getBuyerPrivateKeyHex,
 } from "@/lib/buyerKey";
 import { formatCountdownLong, formatDate, formatNGN } from "@/lib/format";
-import { cn, sanitizeUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 /* ----------------------------- constants ----------------------------- */
 
@@ -790,7 +790,7 @@ function OrderSummaryCard({
   return (
     <section className="rounded-2xl border border-border bg-background p-5 sm:p-6">
       <div className="flex items-start gap-4">
-        <ListingThumb image={firstImage} alt={listing.title} />
+        <ListingThumb image={firstImage} alt={listing.title} size={80} iconScale={0.35} />
         <div className="min-w-0 flex-1">
           <h2 className="line-clamp-2 text-sm font-semibold text-ink">
             {listing.title}
@@ -845,53 +845,6 @@ function PriceRow({
       </span>
     </div>
   );
-}
-
-/**
- * Listing thumbnail — handles both real URLs and the seed-based
- * placeholders our fixtures use. Wraps `sanitizeUrl()` because
- * `image.url` is event-sourced and untrusted per the security policy.
- */
-function ListingThumb({
-  image,
-  alt,
-}: {
-  image: ApiListingImage | undefined;
-  alt: string;
-}) {
-  const url = image?.url ? sanitizeUrl(image.url) : undefined;
-  if (url) {
-    return (
-      <img
-        src={url}
-        alt={alt}
-        loading="lazy"
-        className="h-20 w-20 shrink-0 rounded-xl object-cover"
-      />
-    );
-  }
-  // Seed-only fixtures (or missing image) — render a deterministic
-  // gradient placeholder rather than a broken image.
-  const seed = image?.seed ?? alt;
-  return (
-    <div
-      aria-hidden
-      className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl text-ink-soft"
-      style={{
-        background: `linear-gradient(135deg, hsl(${(hashCode(seed) % 360 + 360) % 360} 35% 88%), hsl(${(hashCode(seed) * 7 % 360 + 360) % 360} 30% 80%))`,
-      }}
-    >
-      <PackageCheck className="h-7 w-7 opacity-50" />
-    </div>
-  );
-}
-
-function hashCode(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  }
-  return h;
 }
 
 /* ----------------------- delivery details ---------------------------- */

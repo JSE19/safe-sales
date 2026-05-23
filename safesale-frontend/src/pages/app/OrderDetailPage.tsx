@@ -49,6 +49,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppShell } from "@/components/safesale/AppShell";
 import { EscrowStatusPill } from "@/components/safesale/EscrowStatus";
+import { ListingThumb } from "@/components/safesale/ListingThumb";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -72,7 +73,6 @@ import {
   apiClient,
   ApiError,
   type ApiDispute,
-  type ApiListingImage,
   type ApiOrder,
   type ApiOrderStatus,
   type GetOrderResponse,
@@ -83,7 +83,7 @@ import {
   formatRelative,
   formatTime,
 } from "@/lib/format";
-import { cn, sanitizeUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 /** Backend order statuses that won't change — stop polling here. */
 const TERMINAL_STATUSES: ApiOrderStatus[] = ["completed", "refunded"];
@@ -1048,51 +1048,6 @@ function CopyButton({
       <Copy className="h-3.5 w-3.5" aria-hidden />
     </button>
   );
-}
-
-/* ------------------------------ thumbnails ------------------------------ */
-
-function ListingThumb({
-  image,
-  alt,
-  size,
-}: {
-  image: ApiListingImage | undefined;
-  alt: string;
-  size: number;
-}) {
-  const url = image?.url ? sanitizeUrl(image.url) : undefined;
-  const dim = { width: size, height: size };
-  if (url) {
-    return (
-      <img
-        src={url}
-        alt={alt}
-        loading="lazy"
-        className="shrink-0 rounded-xl object-cover"
-        style={dim}
-      />
-    );
-  }
-  const seed = image?.seed ?? alt;
-  return (
-    <div
-      aria-hidden
-      className="flex shrink-0 items-center justify-center rounded-xl bg-surface text-ink-soft"
-      style={{
-        ...dim,
-        background: `linear-gradient(135deg, hsl(${((hash(seed) % 360) + 360) % 360} 35% 88%), hsl(${(((hash(seed) * 7) % 360) + 360) % 360} 30% 80%))`,
-      }}
-    >
-      <Package className="h-5 w-5 opacity-60" />
-    </div>
-  );
-}
-
-function hash(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  return h;
 }
 
 /* ------------------------------ skeleton ------------------------------ */
