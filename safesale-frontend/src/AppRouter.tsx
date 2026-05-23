@@ -9,6 +9,7 @@ import Checkout from "./pages/Checkout";
 import BuyerOrder from "./pages/BuyerOrder";
 import Onboarding from "./pages/Onboarding";
 import Admin from "./pages/Admin";
+import { MediatorGate } from "./components/safesale/MediatorGate";
 
 import DashboardHome from "./pages/app/DashboardHome";
 import ListingsPage from "./pages/app/ListingsPage";
@@ -47,8 +48,15 @@ export function AppRouter() {
         <Route path="/app/dispute" element={<DisputePage />} />
         <Route path="/app/dispute/:id" element={<DisputePage />} />
 
-        {/* Admin / mediator */}
-        <Route path="/admin" element={<Admin />} />
+        {/* Admin / mediator — gated to VITE_MEDIATOR_NPUB only. */}
+        <Route
+          path="/admin"
+          element={
+            <MediatorGate>
+              <Admin />
+            </MediatorGate>
+          }
+        />
 
         {/* 404 */}
         <Route path="*" element={<NotFound />} />

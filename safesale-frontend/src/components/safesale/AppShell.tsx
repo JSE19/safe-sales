@@ -1,5 +1,6 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useState } from "react";
+import { nip19 } from "nostr-tools";
 import { cn } from "@/lib/utils";
 import { Logo, LogoMark } from "./Logo";
 import { Avatar } from "./Avatar";
@@ -11,12 +12,22 @@ import {
   Bell,
   Search,
   Scale,
+  ArrowLeft,
 } from "lucide-react";
 
 import { useCurrentSeller } from "@/hooks/useCurrentSeller";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSellerOrders } from "@/hooks/useSellerOrders";
 import { genUserName } from "@/lib/genUserName";
+
+/** Convert pubkey hex → npub, null on bad input. */
+function safeNpub(pubkeyHex: string): string | null {
+  try {
+    return nip19.npubEncode(pubkeyHex);
+  } catch {
+    return null;
+  }
+}
 
 interface Props {
   children: React.ReactNode;
@@ -73,14 +84,19 @@ export function AppShell({ children, title, subtitle, action }: Props) {
   const { user, metadata } = useCurrentUser();
 
   // Sidebar / mobile avatar + name + handle, in that priority order:
-  //   1. The SafeSale seller record (post-onboarding)
+  //   1. The SafeSale seller record (post-onboarding) — but ONLY when
+  //      its stored npub matches the active Nostr login's pubkey. A
+  //      stale `currentSeller` left over from a previous session would
+  //      otherwise paint the wrong name in the sidebar.
   //   2. Nostr kind-0 metadata (logged in via NIP-07/nsec/bunker but
   //      hasn't completed SafeSale signup yet)
   //   3. A generic placeholder so the shell still renders for guests
-  const sellerNpub = seller?.npub;
-  const displayName = seller?.name ?? metadata?.name ?? metadata?.display_name ??
+  const userNpub = user?.pubkey ? safeNpub(user.pubkey) : null;
+  const trustedSeller = seller && seller.npub === userNpub ? seller : null;
+  const sellerNpub = trustedSeller?.npub;
+  const displayName = trustedSeller?.name ?? metadata?.name ?? metadata?.display_name ??
     (user?.pubkey ? genUserName(user.pubkey) : "Guest");
-  const displayHandle = seller?.handle ?? metadata?.nip05?.split("@")[0] ?? null;
+  const displayHandle = trustedSeller?.handle ?? metadata?.nip05?.split("@")[0] ?? null;
   const avatarSeed = sellerNpub ?? user?.pubkey ?? "guest";
 
   // Live dispute count off the real seller-orders feed. When the seller
@@ -97,9 +113,18 @@ export function AppShell({ children, title, subtitle, action }: Props) {
     <div className="min-h-screen bg-surface text-foreground">
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-border bg-background lg:flex lg:flex-col">
-        <div className="flex h-16 items-center border-b border-border px-5">
-          <Link to="/app">
+        <div className="flex h-16 items-center justify-between border-b border-border px-5">
+          <Link to="/app" aria-label="Dashboard home">
             <Logo />
+          </Link>
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-ink-soft hover:bg-secondary hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+            aria-label="Back to marketing home"
+            title="Back to landing page"
+          >
+            <ArrowLeft className="h-3 w-3" />
+            Home
           </Link>
         </div>
         <nav className="flex-1 overflow-y-auto px-3 py-4">

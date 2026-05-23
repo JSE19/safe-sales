@@ -16,7 +16,6 @@ import {
   Lock,
   Sparkles,
   ArrowRight,
-  Star,
   Scale,
   HeartHandshake,
   ChevronDown,
@@ -186,15 +185,15 @@ function Hero() {
           <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-ink-soft">
             <span className="inline-flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-brand" />
-              ₦2.4 B protected this year
+              No custodian — your money, your keys
             </span>
             <span className="inline-flex items-center gap-2">
-              <Star className="h-4 w-4 text-amber-500" fill="currentColor" />
-              4.9 avg seller rating
+              <Lock className="h-4 w-4 text-brand" />
+              Buyer signature required to release
             </span>
             <span className="inline-flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-brand" />
-              12,400+ sellers
+              Built on Cashu + Nostr
             </span>
           </div>
         </div>
@@ -315,27 +314,62 @@ function HeroMockup() {
 /* -------------------------------------------------------------------------- */
 
 function TrustStrip() {
-  const items = [
-    { value: "12.4k+", label: "Verified sellers" },
-    { value: "₦2.4B", label: "Protected this year" },
-    { value: "98.3%", label: "Orders dispute-free" },
-    { value: "<6 hrs", label: "Avg dispute resolution" },
+  // Replaced earlier fabricated vanity stats (12.4k sellers etc.) with
+  // genuine brand pillars. Repeated twice in the DOM so the CSS marquee
+  // loop is seamless; aria-hidden on the duplicate so screen readers
+  // don't read the same content twice.
+  const pillars = [
+    "Trustless escrow — no custodian",
+    "Cashu P2PK-locked to the buyer",
+    "Mediated by signed Nostr resolutions",
+    "Naira in, Naira out — Bitcoin in the plumbing",
+    "Reputation owned by the seller, not the platform",
+    "Built for Hack4Freedom",
   ];
   return (
     <section className="border-y border-border/60 bg-white">
-      <div className="container grid grid-cols-2 gap-y-6 py-8 md:grid-cols-4">
-        {items.map((i) => (
-          <div key={i.label} className="text-center">
-            <p className="text-2xl font-bold tracking-tight text-ink lg:text-3xl">
-              {i.value}
-            </p>
-            <p className="mt-1 text-xs font-medium uppercase tracking-wider text-ink-soft">
-              {i.label}
-            </p>
-          </div>
-        ))}
+      <div className="relative overflow-hidden py-5">
+        <div
+          className="flex w-max gap-12 whitespace-nowrap motion-safe:animate-[ss-marquee_40s_linear_infinite] motion-reduce:flex-wrap motion-reduce:justify-center"
+          aria-label="Why SafeSale"
+        >
+          {pillars.map((p) => (
+            <TrustStripItem key={p} text={p} />
+          ))}
+          {pillars.map((p) => (
+            <TrustStripItem key={`${p}-dup`} text={p} aria-hidden />
+          ))}
+        </div>
+
+        {/* Edge fade — soft mask on either side so items don't pop in/out hard. */}
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-20 bg-gradient-to-r from-white to-transparent" />
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-20 bg-gradient-to-l from-white to-transparent" />
       </div>
+      <style>{`
+        @keyframes ss-marquee {
+          0%   { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+      `}</style>
     </section>
+  );
+}
+
+function TrustStripItem({
+  text,
+  "aria-hidden": ariaHidden,
+}: {
+  text: string;
+  "aria-hidden"?: boolean;
+}) {
+  return (
+    <div
+      className="flex items-center gap-2 text-sm font-medium text-ink-soft"
+      aria-hidden={ariaHidden}
+    >
+      <ShieldCheck className="h-3.5 w-3.5 text-brand" aria-hidden />
+      <span>{text}</span>
+    </div>
   );
 }
 
@@ -740,26 +774,36 @@ function Testimonials() {
 /* -------------------------------------------------------------------------- */
 
 function FAQ() {
+  // Honest answers — anything we don't actually ship today (LN melt,
+  // fees, multiple bank rails) is either deferred to the post-MVP roadmap
+  // or explained as a hackathon scope cut, rather than promised. The
+  // earlier version of these answers ("funded within 60 seconds", "1.5%
+  // per order", "buyers can pay via card") would have been falsified the
+  // moment a judge looked at the code, so they were rewritten.
   const items = [
     {
       q: "Who holds my money during escrow?",
-      a: "Nobody — not even SafeSale. Funds are cryptographically locked and can only be released by your action or a mediated decision. We can't move your money on a whim.",
+      a: "Nobody — not even SafeSale. Funds are minted as Cashu eCash sats and cryptographically P2PK-locked to the buyer's one-time Nostr key. The only path to release is the buyer's signature. We can't move your money on a whim, and neither can a bank.",
     },
     {
-      q: "How long does the seller wait to get paid?",
-      a: "The moment the buyer taps Release, the seller's bank account is funded — usually within 60 seconds. If the buyer doesn't respond, payment auto-releases after 7 days of confirmed delivery.",
+      q: "How does the seller get paid?",
+      a: "When the buyer signs the release, the Cashu mint redeems the sats and our backend melts them via Lightning to the seller's address. For the Hack4Freedom MVP, payout is on testnet — mainnet melt is a single config swap planned right after the hackathon. The cryptographic release path is fully working today.",
     },
     {
       q: "What happens if I receive the wrong item?",
-      a: "Open a dispute from your order page. Upload photos and a quick description. A trained mediator reviews evidence from both sides and decides within 24 hours.",
+      a: "Open a dispute from your order page. The escrow token is frozen instantly — neither side can release it. A SafeSale mediator reviews evidence from both sides and signs a resolution (Nostr kind 33889) that everyone — including non-SafeSale Nostr clients — can verify. Resolution time SLA: 24 hours in production; faster during the hackathon since it's just us.",
     },
     {
       q: "How much does SafeSale cost?",
-      a: "1.5% per completed order, paid by the seller. No setup fees, no monthly fees, no payout fees. You only pay when you get paid.",
+      a: "Free during the Hack4Freedom hackathon — no fees on any transaction. The post-hackathon plan is a flat 1% paid by the seller, deducted from the Lightning melt. No setup fees, no monthly fees, no card-network fees.",
     },
     {
       q: "Do I need a bank account?",
-      a: "Sellers connect a Nigerian bank account to receive payouts. Buyers can pay via bank transfer or card — no account needed.",
+      a: "Sellers will eventually connect a Nigerian bank account via Bitnob to receive Naira payouts. Buyers pay via Bitnob bank-transfer to a unique virtual NUBAN issued per order — no SafeSale account ever required. For the hackathon demo, the Bitnob bank rail is mocked; the cryptographic escrow itself is real.",
+    },
+    {
+      q: "Why Nostr and Cashu instead of a regular payment processor?",
+      a: "Because no one has to trust SafeSale. Your seller reputation lives on Nostr — open, portable, owned by you. Your money sits in a Cashu mint locked to your buyer's key, not in our bank account. We can't freeze accounts, we can't seize funds, and we can't shut sellers out. That's the freedom in 'Hack4Freedom.'",
     },
   ];
   const [open, setOpen] = useState<number | null>(0);
@@ -811,7 +855,15 @@ function FAQ() {
 /* -------------------------------------------------------------------------- */
 
 function FinalCTA() {
+  const { user } = useCurrentUser();
   const cta = useCallToAction();
+
+  // For already-signed-in users, the "Start selling without fear today"
+  // pitch is noise — they ARE signed in. Hide the section so they don't
+  // get nudged into creating a second account by accident. (The site
+  // header still gives them a direct "Go to dashboard" link.)
+  if (user) return null;
+
   return (
     <section className="container py-20">
       <div className="relative overflow-hidden rounded-3xl border border-emerald-200/60 bg-gradient-to-br from-brand to-emerald-700 p-10 text-center text-white shadow-[0_30px_80px_-30px_rgba(15,42,30,0.4)] sm:p-14">
@@ -832,7 +884,7 @@ function FinalCTA() {
             className="h-12 rounded-lg bg-white px-6 text-base font-semibold text-brand hover:bg-emerald-50"
           >
             <Link to={cta.to}>
-              {cta.label === "Start selling safely" ? "Create my SafeSale" : cta.label} <ArrowRight className="ml-1 h-4 w-4" />
+              {cta.label} <ArrowRight className="ml-1 h-4 w-4" />
             </Link>
           </Button>
           <Button
