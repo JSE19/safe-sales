@@ -15,9 +15,14 @@
 import { httpApi } from "./http";
 import { mockApi } from "./mocks";
 import type {
+  CreateListingRequest,
+  CreateListingResponse,
   CreateOrderRequest,
   CreateOrderResponse,
+  CreateSellerRequest,
+  CreateSellerResponse,
   GetOrderResponse,
+  GetSellerOrdersResponse,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,
@@ -27,6 +32,12 @@ import type {
 } from "./types";
 
 export interface ApiClient {
+  /** POST /api/sellers — register a new seller from their Nostr identity. */
+  createSeller(req: CreateSellerRequest): Promise<CreateSellerResponse>;
+  /** POST /api/listings — seller publishes a new listing. */
+  createListing(req: CreateListingRequest): Promise<CreateListingResponse>;
+  /** GET /api/orders/seller/:npub — seller dashboard orders feed. */
+  getSellerOrders(npub: string): Promise<GetSellerOrdersResponse>;
   /** POST /api/orders — buyer initiates a purchase. */
   createOrder(req: CreateOrderRequest): Promise<CreateOrderResponse>;
   /** GET /api/orders/:token — buyer order page envelope. */

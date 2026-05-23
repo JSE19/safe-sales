@@ -23,14 +23,20 @@ import type {
   ApiOrder,
   ApiOrderStatus,
   ApiSeller,
+  CreateListingRequest,
+  CreateListingResponse,
   CreateOrderRequest,
   CreateOrderResponse,
+  CreateSellerRequest,
+  CreateSellerResponse,
   GetOrderResponse,
+  GetSellerOrdersResponse,
   MockListingHint,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,
   ReleaseOrderResponse,
+  SellerOrderRow,
   ShipOrderRequest,
   ShipOrderResponse,
 } from "./types";
@@ -42,6 +48,7 @@ import {
   getListing,
   getOrderByToken,
   getSeller,
+  orders as fixtureOrdersArray,
 } from "@/lib/mock";
 import type { EscrowStatus } from "@/lib/types";
 
@@ -72,6 +79,21 @@ const memoryOrders = new Map<string, MockEnvelope>();
  */
 const sessionListings = new Map<string, ApiListing>();
 const sessionSellers = new Map<string, ApiSeller>();
+
+/**
+ * Registered sellers, keyed by **npub** — populated by `createSeller`.
+ * Lets the mock answer `getSellerOrders(npub)` without a separate
+ * lookup table.
+ */
+const registeredSellersByNpub = new Map<string, ApiSeller>();
+
+/**
+ * Listings created via `createListing`, keyed by listing id. Separate
+ * from `sessionListings` (which is populated by buyer-side hints)
+ * because these are seller-authored and need to be queryable by
+ * seller for the dashboard.
+ */
+const createdListings = new Map<string, ApiListing>();
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -159,6 +181,11 @@ function fixtureListingToApi(listingId: string): ApiListing | null {
   // the seller and discovered by the buyer this session.
   const sessionMatch = sessionListings.get(listingId);
   if (sessionMatch) return sessionMatch;
+
+  // Then listings the seller authored via `createListing` in this
+  // session — these need to be orderable just like fixtures.
+  const createdMatch = createdListings.get(listingId);
+  if (createdMatch) return createdMatch;
 
   const l = getListing(listingId);
   if (!l) return null;
@@ -305,6 +332,107 @@ function fixtureEnvelope(token: string): MockEnvelope | null {
 /* ------------------------------ public API ----------------------------- */
 
 export const mockApi = {
+  async createSeller(req: CreateSellerRequest): Promise<CreateSellerResponse> {
+    if (registeredSellersByNpub.has(req.npub)) {
+      throw new ApiError(
+        "SELLER_ALREADY_EXISTS",
+        "A seller with this Nostr identity already exists.",
+        409,
+      );
+    }
+    const seller: ApiSeller = {
+      // Stable mock id derived from the npub so the same seller gets the
+      // same id across page reloads if they log in with the same key.
+      id: `mock-seller-${req.npub.slice(5, 21)}`,
+      npub: req.npub,
+      pubkey: `mock-pk-${req.npub.slice(5, 21)}`,
+      handle: req.handle.toLowerCase(),
+      name: req.name,
+      location: req.location,
+      category: req.category,
+      bio: req.bio ?? null,
+      verified: false,
+      lnAddress: req.lnAddress ?? null,
+      createdAt: nowIso(),
+    };
+    registeredSellersByNpub.set(req.npub, seller);
+    return { seller };
+  },
+
+  async createListing(req: CreateListingRequest): Promise<CreateListingResponse> {
+    const seller = registeredSellersByNpub.get(req.sellerNpub);
+    if (!seller) {
+      throw new ApiError(
+        "SELLER_NOT_FOUND",
+        "Seller npub does not match any registered seller.",
+        400,
+      );
+    }
+    const id = `mock-listing-${Math.random().toString(36).slice(2, 14)}`;
+    const created = nowIso();
+    const listing: ApiListing = {
+      id,
+      sellerId: seller.id,
+      title: req.title,
+      description: req.description,
+      priceNGN: req.priceNGN,
+      images: req.images,
+      category: req.category,
+      variants: req.variants ?? null,
+      inStock: req.inStock ?? 1,
+      delivery: req.delivery ?? null,
+      active: true,
+      nostrEventId: null,
+      createdAt: created,
+      updatedAt: created,
+    };
+    createdListings.set(id, listing);
+    return { listing };
+  },
+
+  async getSellerOrders(npub: string): Promise<GetSellerOrdersResponse> {
+    const seller = registeredSellersByNpub.get(npub);
+    // If the npub doesn't match a registered seller, try to fall back
+    // to the fixture currentSeller — useful for cold demos against the
+    // mock where nobody has actually signed up.
+    const sellerId = seller?.id ?? currentSeller.id;
+
+    // Pull rows from the in-memory order store first (buyer-flow orders
+    // created this session), then any fixture orders this seller owns.
+    const rows: SellerOrderRow[] = [];
+
+    for (const env of memoryOrders.values()) {
+      if (env.order.sellerId !== sellerId) continue;
+      rows.push({
+        ...env.order,
+        listing: env.listing,
+        dispute: env.dispute,
+      });
+    }
+
+    // Fixture orders — pull any fixture orders this seller owns that
+    // aren't already in memoryOrders.
+    for (const seedOrder of fixtureOrdersArray) {
+      if (seedOrder.sellerId !== sellerId) continue;
+      if (rows.some((r) => r.orderToken === seedOrder.orderToken)) continue;
+      const env = fixtureEnvelope(seedOrder.orderToken);
+      if (!env) continue;
+      rows.push({
+        ...env.order,
+        listing: env.listing,
+        dispute: env.dispute,
+      });
+    }
+
+    // Newest first, like the backend (`orderBy: { createdAt: 'desc' }`).
+    rows.sort(
+      (a, b) =>
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
+
+    return { orders: rows };
+  },
+
   async createOrder(req: CreateOrderRequest): Promise<CreateOrderResponse> {
     // If the caller passed a listing hint, register it in the session
     // store BEFORE looking up the listing. This makes the buyer flow

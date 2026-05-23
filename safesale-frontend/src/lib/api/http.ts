@@ -15,9 +15,14 @@
  */
 
 import type {
+  CreateListingRequest,
+  CreateListingResponse,
   CreateOrderRequest,
   CreateOrderResponse,
+  CreateSellerRequest,
+  CreateSellerResponse,
   GetOrderResponse,
+  GetSellerOrdersResponse,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,
@@ -94,6 +99,18 @@ async function request<T>(
 }
 
 export const httpApi = {
+  createSeller(req: CreateSellerRequest): Promise<CreateSellerResponse> {
+    return request<CreateSellerResponse>("POST", "/api/sellers", req);
+  },
+  createListing(req: CreateListingRequest): Promise<CreateListingResponse> {
+    return request<CreateListingResponse>("POST", "/api/listings", req);
+  },
+  getSellerOrders(npub: string): Promise<GetSellerOrdersResponse> {
+    return request<GetSellerOrdersResponse>(
+      "GET",
+      `/api/orders/seller/${encodeURIComponent(npub)}`,
+    );
+  },
   createOrder(req: CreateOrderRequest): Promise<CreateOrderResponse> {
     // Strip mock-only fields before sending over the wire. The real
     // backend has no notion of `_listingHint`; the listing already

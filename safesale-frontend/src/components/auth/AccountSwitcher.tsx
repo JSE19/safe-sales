@@ -9,6 +9,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar.tsx';
 import { Skeleton } from '@/components/ui/skeleton.tsx';
 import { useLoggedInAccounts, type Account } from '@/hooks/useLoggedInAccounts';
+import { clearCurrentSeller } from '@/hooks/useCurrentSeller';
 import { genUserName } from '@/lib/genUserName';
 
 interface AccountSwitcherProps {
@@ -91,7 +92,12 @@ export function AccountSwitcher({ onAddAccountClick }: AccountSwitcherProps) {
           <span>Add another account</span>
         </DropdownMenuItem>
         <DropdownMenuItem
-          onClick={() => removeLogin(currentUser.id)}
+          onClick={() => {
+            // Clear the SafeSale seller record alongside the Nostr login
+            // so a future signin doesn't inherit stale handle/name data.
+            clearCurrentSeller();
+            removeLogin(currentUser.id);
+          }}
           className='flex items-center gap-2 cursor-pointer p-2 rounded-md text-red-500'
         >
           <LogOut className='w-4 h-4' />

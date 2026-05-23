@@ -289,3 +289,85 @@ export interface OpenDisputeResponse {
   order: ApiOrder;
   dispute: ApiDispute;
 }
+
+/* --------------------------- seller endpoints -------------------------- */
+
+/**
+ * `POST /api/sellers` request body. Field names match the backend's
+ * `CreateSellerSchema` (Zod). Required minima copied verbatim so the
+ * frontend can validate before hitting the network:
+ *   - handle: 3–24 chars, `^[a-z0-9][a-z0-9._-]*[a-z0-9]$`
+ *   - name: 2–80 chars
+ *   - location: 2–80 chars
+ *   - phone: 7–20 chars
+ *   - category: 2–60 chars
+ */
+export interface CreateSellerRequest {
+  npub: string;
+  handle: string;
+  name: string;
+  location: string;
+  phone: string;
+  category: string;
+  bio?: string;
+  bankName?: string;
+  bankAccount?: string;
+  bankHolder?: string;
+  /** Lightning address (LNURL-pay), e.g. `seller@coinos.io`. */
+  lnAddress?: string;
+}
+
+export interface CreateSellerResponse {
+  seller: ApiSeller;
+}
+
+/* -------------------------- listing endpoints ------------------------- */
+
+/**
+ * `POST /api/listings` request body. Field names match
+ * `CreateListingSchema` on the backend. Note the image schema requires
+ * each image to have *either* a `url` or a `seed` — at least one.
+ */
+export interface CreateListingRequest {
+  sellerNpub: string;
+  title: string;
+  description: string;
+  priceNGN: number;
+  images: ApiListingImage[];
+  category: string;
+  variants?: string[];
+  inStock?: number;
+  delivery?: string;
+}
+
+export interface CreateListingResponse {
+  listing: ApiListing;
+}
+
+/* --------------- seller dashboard endpoints (read-only) --------------- */
+
+/**
+ * `GET /api/orders/seller/:npub` — returns all orders across all of
+ * this seller's listings, ordered `createdAt desc`. Powers the seller
+ * dashboard KPIs + "Needs your attention" list.
+ *
+ * NOTE — backend currently includes the order's `cashuToken` field in
+ * this response (a side effect of `include: { listing: true }` without
+ * an explicit `select`). The seller never needs that token (it's
+ * P2PK-locked to the buyer's key — useless to anyone else) and it
+ * should be redacted server-side. Flagged for the backend partner;
+ * we deliberately don't reference the field on the frontend.
+ */
+export interface GetSellerOrdersResponse {
+  orders: SellerOrderRow[];
+}
+
+/**
+ * One row on the seller dashboard. Same as `ApiOrder` but joined to
+ * the full listing and (optional) dispute so the dashboard renders
+ * each row without further roundtrips.
+ */
+export interface SellerOrderRow extends ApiOrder {
+  listing: ApiListing;
+  dispute: ApiDispute | null;
+}

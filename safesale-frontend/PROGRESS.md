@@ -7,6 +7,63 @@
 
 ---
 
+## 🚨 4-day demo countdown — Hack4Freedom plan (added Day 1)
+
+Submission deadline: **4 days from 2026-05-23**. Realistic working window ≈ 50–60 hours. Plan is aggressively scoped to prefer reliability + a clean pitch over feature breadth.
+
+### Daily plan
+
+**Day 1 (today) — verify + design #5 in parallel**
+
+- [ ] **Integration smoke test against live Railway.** Non-negotiable; we haven't verified end-to-end since before #3 + #4 rewrites. `VITE_API_URL=https://safe-sales-backend-production.up.railway.app npm run dev` → walk full flow (onboard → list → buy → simulate Bitnob → ship → release). Document any breakages.
+- [ ] **Coordinate with Joy on three decisions:** (1) demo-mode payment trigger (curl `POST /api/webhooks/bitnob` or backend auto-advance flag); (2) Lightning payout gap — wire mainnet melt or accept as documented delta #2; (3) reviews (kind 1985) — ship `publishReview()` on release endpoint or stay placeholder.
+- [ ] **Draft screen #5 (Earnings) port spec** — skipping Stitch this round; it costs more time than the layout it produces. Direct React port spec instead.
+
+**Day 2 — screens #5 + #9 ported (with mocks where backend missing)**
+
+- [ ] **Port screen #5 (Earnings)** — read `useSellerOrders`, sum sats across `completed` orders for the monthly total; list completed orders as payout history. "Cash out to Naira" = honest "coming soon" toast. Flip to ✅ with note "wired to seller-orders aggregation; awaiting `/api/earnings` for real payout history."
+- [ ] **Port screen #9 (Admin Dispute Dashboard)** — static fixture of 3–4 example disputes, "Resolve" action toasts. Flip to ✅ with note "static demo surface; awaiting backend admin endpoints."
+- [ ] **All 9 screens design-complete by Day 2 evening.**
+
+**Day 3 — polish, deploy, dry-run**
+
+- [ ] **Morning polish pass (~2 hrs total):** consolidate the 4 inlined `ListingThumb` helpers into one shared component (PROGRESS.md "Refactor pass before launch" line 92); add a global TanStack Query error boundary; audit every mutation button for visible `Loader2` state; remove any stray `console.log`.
+- [ ] **Deploy to Vercel** with `VITE_API_URL` pointing at Railway. Tell Joy to append the Vercel URL to her `FRONTEND_ORIGINS` env var (one Railway env change on her side; per her STATE.md).
+- [ ] **Full dry-run with Joy on video call** — run + record the demo end-to-end on the deployed URL. Time it. Anything >5 min, cut. Identify any remaining UX issue, fix that evening.
+- [ ] **Evening: open + merge `frontend → main` and `backend → main` PRs together.** Tag `hack4freedom-submission-v1` on `main`.
+
+**Day 4 — submission + rehearsal + contingency**
+
+- [ ] **Write submission README** with project description, the Nigerian seller market story leading, screenshots, then technical detail. Include a "Hackathon MVP scope" section documenting the PRD deltas explicitly (own them, don't hide them).
+- [ ] **Delete `.md` files we won't ship** as part of the final pre-submission commit: `PROGRESS.md`, `AGENTS.md`, `BUSINESS.md`, all `.stitch-designs/`. Keep: `README.md`, `NIP.md`, possibly trimmed `PRD.md`.
+- [ ] **Rehearse the pitch 5+ times.** Most teams lose points on muddled narration — product can be 7/10 + pitch 9/10 beats 9/10 + 7/10.
+- [ ] **Backup plan:** 90-second screen recording of the working flow saved locally, ready to play if Railway or wifi fails on stage.
+- [ ] **Rest before demo day.**
+
+### The Lightning payout gap — pitch line (instead of wiring mainnet)
+
+The single biggest hole in the freedom-tech story. Resolution: **don't try to fix in 4 days; own it in the pitch.**
+
+> *"For the hackathon we're running on Cashu testnut, which can mint and verify P2PK locks but can't melt to a mainnet Lightning wallet. The seller release fully completes the cryptographic guarantee — buyer's signature proves consent, the mint enforces it. Mainnet swap is a config change for post-hackathon, not a re-architecture."*
+
+Plus: surface `redeemedSats` (returned by `apiClient.releaseOrder`) on the completed-order UI as a "Settled · {N} sats" line so the demo visibly shows the settlement number even though no LN melt happens. ~30 min of work; already partially in `BuyerOrder.tsx`; verify on the seller side too.
+
+### Coordination touchpoints with Joy (the only 3)
+
+| When | What |
+|---|---|
+| **Day 1** | 3 decisions: payment trigger, LN scope, reviews scope |
+| **Day 2 evening** | Confirm 9/9 frontend + admin/earnings backend status |
+| **Day 3 afternoon** | Full live demo together, recorded |
+
+Nothing more. Anything else is process-for-process's-sake.
+
+### Win odds — honest
+
+Top 3: ~30–40%. Outright win: ~10–15%. The cryptographic trust story is real, the market is specific and underserved, and 8/9 (soon 9/9) screens are polished. The three things that move odds up: (1) closing or cleanly explaining the LN gap, (2) rehearsing pitch 5+ times, (3) leading with the Nigerian seller market story before any technical content.
+
+---
+
 ## Design system contract (applies to every prompt)
 
 - React + TypeScript single component, no `any` types.
@@ -24,21 +81,23 @@
 
 ## The 9 core screens
 
-Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ next · ⬜ pending
+Legend: ✅ done (designed + wired to live backend) · 🟡 in-progress · ⏭ next · ⬜ pending
 
 | # | Screen | Route | Audience | Status | Notes |
 |---|---|---|---|---|---|
-| 1 | Seller Onboarding | `/onboarding` | New seller | ✅ | Stitch HTML in `.stitch-designs/01-onboarding.html` |
-| 2 | Seller Dashboard Home | `/app` | Seller | 🟡 | Stitch prompt sent (`.stitch-designs/02-seller-dashboard.prompt.md`), awaiting HTML |
-| 3 | Seller Listings (list + create) | `/app/listings` | Seller | ⬜ | |
-| 4 | Seller Orders (list + detail with "Mark Shipped") | `/app/orders` & `/app/orders/:id` | Seller | ⬜ | |
-| 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | |
-| 6 | Public Listing | `/buy/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/06-public-listing.html` → React in `src/pages/PublicListing.tsx`; wired to `useListing` (Nostr kind 30018 → fixture fallback for cold demos) |
-| 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/03-checkout.html` |
+| 1 | Seller Onboarding | `/onboarding` | New seller | ✅ | Stitch HTML in `.stitch-designs/01-onboarding.html` → React in `src/pages/Onboarding.tsx`; wired to `apiClient.createSeller` (POST /api/sellers) before the Nostr login is persisted, so duplicate-handle 409s surface cleanly. Stores the returned seller record via `useCurrentSeller`. Phone field is required (backend Zod minimum). |
+| 2 | Seller Dashboard Home | `/app` | Seller | ✅ | Stitch HTML in `.stitch-designs/02-seller-dashboard.html` → React in `src/pages/app/DashboardHome.tsx`; KPIs (locked in escrow / paid out 7d / orders to ship / active listings) computed off `useSellerOrders` (GET /api/orders/seller/:npub, 15s poll) + `useMyListings`. "Needs your attention" surfaces payment_locked + disputed rows oldest-first. Reputation strip is placeholder until kind 1985 review feed is wired. |
+| 3 | Seller Listings (list + create) | `/app/listings` | Seller | ✅ | Stitch HTML in `.stitch-designs/03-seller-listings.html` → React in `src/pages/app/ListingsPage.tsx`. Snapshot strip + search/filter chips + 3-col card grid + mobile FAB. Create-listing wired to `apiClient.createListing` (POST /api/listings) since Phase 8 step B — backend cuid round-trips as the Nostr kind 30018 `d` tag. Edit + Mark out-of-stock surfaced as friendly "coming soon" toasts (backend has no PATCH /api/listings/:id yet — wires the moment that route ships). |
+| 4 | Seller Orders (list + detail) | `/app/orders` & `/app/orders/:token` | Seller | ✅ | Stitch HTML in `.stitch-designs/04-seller-orders.html` → React in `src/pages/app/OrdersPage.tsx` + `src/pages/app/OrderDetailPage.tsx`; both pages already wired (list = `useSellerOrders` 15s poll, detail = `apiClient.getOrder` 8s poll + `apiClient.shipOrder`). List view: amber "Needs your attention" strip (sum of payment_locked + disputed, omitted when zero), search + 6 filter chips with live counts (pending_payment shows only under All), desktop table / mobile cards, 3 empty states + skeleton. Detail view: 2-col on lg+, status-aware hero card (Mark Shipped form inline only when payment_locked — replaces the previous dialog), ship-to panel with copy buttons, order summary with sats subtotal, 4-step activity timeline with alert variant on dispute/refund, mobile sticky action bar that scrolls to the inline ship form. |
+| 5 | Seller Earnings (Bitnob cash-out) | `/app/earnings` | Seller | ⬜ | React component exists but is a mock-fed stub. Backend has no /api/earnings endpoint yet; this screen is blocked on a Phase 8+ backend wire. |
+| 6 | Public Listing | `/buy/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/06-public-listing.html` → React in `src/pages/PublicListing.tsx`; wired to `useListing` (Nostr kind 30018 → fixture fallback for cold demos). |
+| 7 | Buyer Checkout | `/checkout/:id` | Buyer | ✅ | Stitch HTML in `.stitch-designs/07-buyer-checkout.html` → React in `src/pages/Checkout.tsx`; wired to `apiClient.createOrder` + polling. |
 | 8 | Buyer Order Page (release / dispute) | `/order/:token` | Buyer | ✅ | Stitch HTML in `.stitch-designs/08-buyer-order.html` → React in `src/pages/BuyerOrder.tsx`; wired to `apiClient.getOrder` (8s poll), `apiClient.releaseOrder` (signs with nsec from localStorage), `apiClient.openDispute`. 7-state hero, 4-step timeline, mobile sticky action bar. |
-| 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | |
+| 9 | Admin Dispute Dashboard | `/admin` | Mediator | ⬜ | Not designed, not wired. Blocked on backend kind 33889 mediator publishing being live. |
 
-**Progress: 4 / 9 complete.**
+**Status: 8 / 9 screens design-complete + wired; 0 / 9 partially wired; 2 / 9 pending (5 Earnings, 9 Admin).**
+
+The escrow wedge — onboard → list → buy → pay → ship → release — runs end-to-end on Railway today.
 
 ### Deferred (not part of the 9 — polish or build later)
 
@@ -51,26 +110,81 @@ Legend: ✅ done · 🟡 in-progress (prompt sent, awaiting Stitch HTML) · ⏭ 
 
 ---
 
-## Wiring track — making the buyer slice real
+## Wiring track — backend integration status
 
-Pages can look right and still do nothing real. The wiring track runs in parallel with the redesign track and replaces mock data with the backend defined in `BACKEND.md` + the Nostr event spec in `NIP.md`.
+The buyer slice is fully wired against the live Railway backend
+(`https://safe-sales-backend-production.up.railway.app`). Seller wires
+landed during Phase 8 step A–D. Switching modes between mock and real
+is still a one-line env-var flip via `VITE_API_URL`.
 
-### Mock → real mapping (buyer slice)
+### What's wired (verified against Railway)
 
-| Today (mock) | Tomorrow (BACKEND.md + NIP.md) |
-|---|---|
-| `getListing(id)` from `lib/mock.ts` | Nostr query `{kinds:[30018], '#d':[id]}` → `useListing(id)` |
-| `getSeller(id)` | `useAuthor(pubkey)` (existing) |
-| `getReviewsForSeller(id)` | Nostr `{kinds:[1985], '#L':['safesale.review'], '#p':[seller]}` |
-| `getOrderByToken(token)` | `GET /api/orders/:token` + `{kinds:[33888], '#d':[token], authors:[ESCROW_NPUB]}` |
-| `generateOrderToken()` in browser | Backend returns it in `POST /api/orders` response |
-| Checkout `setTimeout` payment-detected simulation | Bitnob webhook → backend mints + publishes 33888 update → frontend re-renders |
-| `getDisputeForOrder()` | `{kinds:[33889], '#a':[order-coord], authors:[MEDIATOR_NPUB]}` |
-| Buyer release dialog (no-op) | `POST /api/orders/:token/release` with P2PK schnorr sig from `useEscrowToken.release()` |
+| Frontend call | Backend route | Where wired | Commit |
+|---|---|---|---|
+| `apiClient.createSeller` | POST /api/sellers | `src/pages/Onboarding.tsx` | `b4a252a` |
+| `apiClient.createListing` | POST /api/listings | `src/pages/app/ListingsPage.tsx` (`CreateListingSheet.onPublish`) | `f36719f` |
+| `apiClient.shipOrder` | POST /api/orders/:token/ship | `src/pages/app/OrderDetailPage.tsx` (`shipMutation`) | `5403562` |
+| `apiClient.getSellerOrders` | GET /api/orders/seller/:npub | `src/hooks/useSellerOrders.ts` → `DashboardHome` | `071d25e` |
+| `apiClient.createOrder` | POST /api/orders | `src/pages/Checkout.tsx` | (pre Phase 8) |
+| `apiClient.getOrder` | GET /api/orders/:token | `src/pages/BuyerOrder.tsx`, `OrderDetailPage` | (pre Phase 8) |
+| `apiClient.releaseOrder` | POST /api/orders/:token/release | `BuyerOrder.tsx` (`releaseMutation`) | (pre Phase 8) |
+| `apiClient.openDispute` | POST /api/orders/:token/dispute | `BuyerOrder.tsx` (`disputeMutation`) | (pre Phase 8) |
 
-### Backend availability
+### Still on mock data (won't break demos — they're read paths only)
 
-The backend lives on `origin/backend` and is being built in parallel. No staging URL yet. Strategy: build a typed API client in `src/lib/api/` shaped to `BACKEND.md`. When `VITE_API_URL` is set we hit the real backend; when unset we return canned responses derived from the existing mocks. Switching modes is a one-line env change.
+| Frontend call | Backend route to add | Where used | Notes |
+|---|---|---|---|
+| `getOrdersForSeller` etc. on `OrdersPage` | GET /api/orders/seller/:npub | `src/pages/app/OrdersPage.tsx` | ✅ Wired in commit `c8a8394`. Same `useSellerOrders` query as the dashboard — both surfaces refresh together. |
+| Edit listing + mark-out-of-stock toggle | PATCH /api/listings/:id (NEW route — not on backend yet) | `src/pages/app/ListingsPage.tsx` ListingCard More menu | Frontend surfaces both as friendly "coming soon" toasts so the seller knows they're real-but-not-yet-wired. One-line `apiClient.updateListing` mutation + Nostr republish (same `d` tag) when the backend route lands. |
+| `payouts` / `earnings` from `lib/mock.ts` | (not designed yet) | `src/pages/app/EarningsPage.tsx` | Blocked on backend endpoints — no /api/earnings yet. |
+| Dispute / return / review cards | kinds 33889, 1985 (Nostr) | `OrderDetailPage`, `BuyerOrder` (review prompt) | Removed from seller order detail in commit `5403562`; will return when 33889 + 1985 are live. |
+| `currentSeller` fixture default | n/a | `lib/api/mocks.ts` cold-demo fallback | Only used when `VITE_API_URL` is unset. Safe. |
+
+### Refactor pass before launch
+
+Once every screen is wired, do one cleanup commit:
+- Delete every `import { ... } from "@/lib/mock"` outside `src/lib/api/mocks.ts`.
+- Delete the entire `currentSeller` / `orders` / `listings` exports from `lib/mock.ts` once nothing references them.
+- Remove the seeded fixture in `lib/mock.ts` (commit `fd6ff2d`) that points at the manually-curl'd Railway listing — the create-listing flow now produces real listings.
+- Refactor / consolidate the `ListingThumb` helper duplicated in `BuyerOrder.tsx` and `OrderDetailPage.tsx`.
+- Drop `lib/buyerKey` exports that aren't called anywhere.
+- Audit `PROGRESS.md` itself — when 9/9 are done, this file should compress to a single "ship state" paragraph, not a sprawling tracker.
+
+---
+
+## PRD deltas — what we ship vs. what the PRD specifies
+
+The PRD describes the full SafeSale product end state. The hackathon
+MVP makes eight conscious scope cuts so the **trustless-escrow wedge**
+(buyer pays → seller ships → buyer releases → seller gets sats)
+runs end-to-end on testnet within the 2-week build window. Track them
+here so demo prep isn't blindsided.
+
+| # | PRD says | We ship | Why deferred | Unblocks when |
+|---|---|---|---|---|
+| 1 | Buyer order link emailed / SMS'd at checkout | Shown on screen + bookmark prompt only | No transactional-email service wired (Resend/Postmark TBD) | Backend `/api/orders` adds an outbound mail hook |
+| 2 | Buyer release triggers Lightning payout to seller's Lightning wallet | Backend marks order `completed` after Cashu redeem; **no actual LN melt to seller** | Backend STATE.md: "testnet mint can't melt mainnet invoices; skipped until mainnet ship" | Backend Phase 9 wires the fee melt + payout |
+| 3 | Bitnob webhook detects bank transfer automatically | Bitnob fully mocked; we curl `POST /api/webhooks/bitnob` to advance state | Bitnob sandbox approval is slower than the 2-week clock | Bitnob sandbox key arrives |
+| 4 | Completed trades published as signed Nostr reviews (kind 1985); seller dashboard shows aggregated reputation | Reputation strip on dashboard is placeholder copy for new sellers | Release endpoint on backend does not publish kind 1985 | Backend adds review-publishing on release |
+| 5 | 72h direct buyer↔seller chat on order page (Phase 4C) | Not built — `OrderDetailPage` has no chat surface | Needs NIP-17 / kind 1059 gift-wrap DM UX, encryption keys, mailbox relay choice | Post-MVP design pass |
+| 6 | Three-checkpoint photo evidence return flow (the damaged-return edge case) | Removed from `OrderDetailPage` in commit `5403562`; backend has no return-evidence model | Hardest flow in the spec; depends on real dispute kind 33889 + per-step photo uploads | Screen #9 (Admin Dispute Dashboard) + backend kind 33889 publishing |
+| 7 | Admin Dispute Dashboard (Dashboard 3 — queue, detail, split-percentage slider, signed resolution) | Backend has mediator key + dispute records; UI is unbuilt (screen #9) | Pending Stitch prompt + design pass | Screen #9 lands |
+| 8 | Seller Earnings: bank account on file, "Cash Out to Naira" via Bitnob, total sats earned | Page exists but reads `lib/mock.ts` payouts/earnings | No `/api/earnings` endpoint; no real Bitnob payout integration (see #2, #3) | Backend adds earnings + Bitnob payout |
+
+### What we DO ship from the PRD (the trustless-escrow core)
+
+All of these are live on Railway and verifiable end-to-end **today**:
+
+- Browser-generated Nostr keypair, nsec in localStorage (Phase 1 step 1–2)
+- Listing publish to Nostr kind 30018 + Postgres (Phase 1 step 5–8)
+- Buyer checkout → backend creates order + (mock) Bitnob virtual account (Phase 2 step 1–8)
+- Bitnob webhook → Cashu mint + NUT-11 P2PK lock to buyer's one-time pubkey (Phase 2 step 9–14)
+- Seller receives Nostr DM on payment-locked (Phase 2 step 17)
+- Seller "Mark Shipped" → `POST /api/orders/:token/ship` → status flip + buyer notification (Phase 3)
+- Buyer "Release Payment" → mint verifies P2PK sig → order completes (Phase 4A step 5–9, minus the LN payout from delta #2)
+- Buyer "Open Dispute" → token frozen, status flip, admin queue entry (Phase 4B step 1–7)
+
+The escrow wedge — the actual hackathon submission — is real.
 
 ---
 
@@ -81,10 +195,13 @@ Raw HTML from Stitch is committed to `.stitch-designs/` so we never lose a desig
 | Screen | Prompt | HTML output |
 |---|---|---|
 | 1 — Seller Onboarding | _(prompt not archived; predates convention)_ | `.stitch-designs/01-onboarding.html` |
+| 2 — Seller Dashboard Home | `.stitch-designs/02-seller-dashboard.prompt.md` | `.stitch-designs/02-seller-dashboard.html` |
 | 6 — Public Listing | `.stitch-designs/06-public-listing.prompt.md` | `.stitch-designs/06-public-listing.html` |
-| 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/03-checkout.html` (numbered from old ordering; safe to rename when next file lands) |
-| 8 — Buyer Order Page | `.stitch-designs/08-buyer-order.prompt.md` | `.stitch-designs/08-buyer-order.html` |
-| 2 — Seller Dashboard Home | `.stitch-designs/02-seller-dashboard.prompt.md` | _(awaiting Stitch)_ |
+| 7 — Buyer Checkout | _(prompt not archived; predates convention)_ | `.stitch-designs/07-buyer-checkout.html` (renamed from `03-checkout.html` once canonical numbering stabilised) |
+| 3 — Seller Listings | `.stitch-designs/03-seller-listings.prompt.md` | `.stitch-designs/03-seller-listings.html` |
+| 4 — Seller Orders (list + detail) | `.stitch-designs/04-seller-orders.prompt.md` | `.stitch-designs/04-seller-orders.html` |
+| 5 — Seller Earnings | _(awaiting prompt)_ | _(awaiting Stitch)_ |
+| 9 — Admin Dispute Dashboard | _(awaiting prompt)_ | _(awaiting Stitch)_ |
 
 ---
 
