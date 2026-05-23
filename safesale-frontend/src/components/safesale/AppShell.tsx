@@ -1,9 +1,9 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { nip19 } from "nostr-tools";
 import { cn } from "@/lib/utils";
 import { Logo, LogoMark } from "./Logo";
 import { Avatar } from "./Avatar";
-import { currentSeller, disputes, getOrder } from "@/lib/mock";
 import {
   Home,
   Package,
@@ -12,8 +12,22 @@ import {
   Bell,
   Search,
   Scale,
+  ArrowLeft,
 } from "lucide-react";
-import { useToast } from "@/hooks/useToast";
+
+import { useCurrentSeller } from "@/hooks/useCurrentSeller";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useSellerOrders } from "@/hooks/useSellerOrders";
+import { genUserName } from "@/lib/genUserName";
+
+/** Convert pubkey hex → npub, null on bad input. */
+function safeNpub(pubkeyHex: string): string | null {
+  try {
+    return nip19.npubEncode(pubkeyHex);
+  } catch {
+    return null;
+  }
+}
 
 interface Props {
   children: React.ReactNode;
@@ -31,12 +45,7 @@ const mobileTabs = [
   { to: "/app/dispute", icon: Scale, label: "Disputes" },
 ];
 
-function buildSidebarGroups() {
-  const activeDisputes = disputes.filter((d) => {
-    const o = getOrder(d.orderId);
-    return o?.sellerId === currentSeller.id && d.status !== "resolved";
-  }).length;
-
+function buildSidebarGroups(activeDisputes: number) {
   return [
     {
       label: "Manage",
@@ -64,34 +73,58 @@ function buildSidebarGroups() {
 
 export function AppShell({ children, title, subtitle, action }: Props) {
   const [notifsOpen, setNotifsOpen] = useState(false);
-  const [hasUnread, setHasUnread] = useState(true);
+  const [hasUnread, setHasUnread] = useState(false);
   const { pathname } = useLocation();
-  const { toast } = useToast();
 
-  useEffect(() => {
-    // Simulate real-time notif after 5s
-    const timer = setTimeout(() => {
-      toast({
-        title: "New order received!",
-        description: "You just got a new order for 'Vintage Denim Jacket'",
-      });
-      setHasUnread(true);
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, [toast]);
+  // Real signed-in identity. `seller` is the SafeSale profile from
+  // `useCurrentSeller` (set by Onboarding after POST /api/sellers).
+  // `user` is the underlying Nostr login from `useCurrentUser`.
+  // Fall back to a friendly "Sign in" prompt when neither exists.
+  const [seller] = useCurrentSeller();
+  const { user, metadata } = useCurrentUser();
+
+  // Sidebar / mobile avatar + name + handle, in that priority order:
+  //   1. The SafeSale seller record (post-onboarding) — but ONLY when
+  //      its stored npub matches the active Nostr login's pubkey. A
+  //      stale `currentSeller` left over from a previous session would
+  //      otherwise paint the wrong name in the sidebar.
+  //   2. Nostr kind-0 metadata (logged in via NIP-07/nsec/bunker but
+  //      hasn't completed SafeSale signup yet)
+  //   3. A generic placeholder so the shell still renders for guests
+  const userNpub = user?.pubkey ? safeNpub(user.pubkey) : null;
+  const trustedSeller = seller && seller.npub === userNpub ? seller : null;
+  const sellerNpub = trustedSeller?.npub;
+  const displayName = trustedSeller?.name ?? metadata?.name ?? metadata?.display_name ??
+    (user?.pubkey ? genUserName(user.pubkey) : "Guest");
+  const displayHandle = trustedSeller?.handle ?? metadata?.nip05?.split("@")[0] ?? null;
+  const avatarSeed = sellerNpub ?? user?.pubkey ?? "guest";
+
+  // Live dispute count off the real seller-orders feed. When the seller
+  // isn't signed in, returns 0 — hook is `enabled: !!npub` internally.
+  const { orders } = useSellerOrders();
+  const activeDisputes = orders.filter((o) => o.status === "disputed").length;
+  const sidebarGroups = buildSidebarGroups(activeDisputes);
 
   const activeTab = mobileTabs.find((t) =>
     t.end ? pathname === t.to : pathname.startsWith(t.to)
   );
-  const sidebarGroups = buildSidebarGroups();
 
   return (
     <div className="min-h-screen bg-surface text-foreground">
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-border bg-background lg:flex lg:flex-col">
-        <div className="flex h-16 items-center border-b border-border px-5">
-          <Link to="/app">
+        <div className="flex h-16 items-center justify-between border-b border-border px-5">
+          <Link to="/app" aria-label="Dashboard home">
             <Logo />
+          </Link>
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-ink-soft hover:bg-secondary hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+            aria-label="Back to marketing home"
+            title="Back to landing page"
+          >
+            <ArrowLeft className="h-3 w-3" />
+            Home
           </Link>
         </div>
         <nav className="flex-1 overflow-y-auto px-3 py-4">
@@ -128,10 +161,16 @@ export function AppShell({ children, title, subtitle, action }: Props) {
         </nav>
         <div className="border-t border-border p-3">
           <div className="flex items-center gap-3 rounded-lg p-2">
-            <Avatar seed={currentSeller.avatarSeed} name={currentSeller.name} size={36} />
+            <Avatar seed={avatarSeed} name={displayName} size={36} />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-ink">{currentSeller.name}</p>
-              <p className="truncate text-xs text-ink-soft">@{currentSeller.handle}</p>
+              <p className="truncate text-sm font-medium text-ink">{displayName}</p>
+              {displayHandle ? (
+                <p className="truncate text-xs text-ink-soft">@{displayHandle}</p>
+              ) : !user ? (
+                <Link to="/onboarding" className="text-xs text-brand hover:underline">
+                  Start selling
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>
@@ -179,35 +218,31 @@ export function AppShell({ children, title, subtitle, action }: Props) {
 
               {notifsOpen && (
                 <>
-                  <div 
-                    className="fixed inset-0 z-10" 
+                  <div
+                    className="fixed inset-0 z-10"
                     onClick={() => setNotifsOpen(false)}
                   />
                   <div className="absolute right-0 mt-2 z-20 w-80 overflow-hidden rounded-2xl border border-border bg-white shadow-xl animate-in fade-in zoom-in duration-200">
                     <div className="border-b border-border p-4">
                       <p className="text-sm font-semibold text-ink">Notifications</p>
                     </div>
-                    <div className="max-h-[320px] overflow-y-auto">
-                      {[
-                        { id: 1, text: "New order received for Vintage Denim Jacket", time: "2m ago", unread: true },
-                        { id: 2, text: "Payment of ₦42,000 released to your bank", time: "1h ago", unread: false },
-                        { id: 3, text: "Chinedu A. sent you a message", time: "3h ago", unread: false },
-                      ].map((n) => (
-                        <div key={n.id} className={cn("p-4 border-b border-border/50 transition-colors hover:bg-secondary/40", n.unread && "bg-brand-soft/20")}>
-                          <p className="text-sm text-ink leading-snug">{n.text}</p>
-                          <p className="mt-1 text-[11px] text-ink-soft">{n.time}</p>
-                        </div>
-                      ))}
+                    <div className="max-h-[320px] overflow-y-auto p-6 text-center">
+                      <p className="text-sm text-ink-soft">
+                        You're all caught up.
+                      </p>
+                      <p className="mt-1 text-xs text-ink-soft">
+                        New order pings will appear here.
+                      </p>
                     </div>
                     <Link to="/app/orders" className="block p-3 text-center text-xs font-medium text-brand hover:bg-brand-soft/40">
-                      View all activity
+                      View all orders
                     </Link>
                   </div>
                 </>
               )}
             </div>
             <div className="lg:hidden">
-              <Avatar seed={currentSeller.avatarSeed} name={currentSeller.name} size={32} />
+              <Avatar seed={avatarSeed} name={displayName} size={32} />
             </div>
           </div>
           {action && (

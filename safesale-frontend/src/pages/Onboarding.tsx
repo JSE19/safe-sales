@@ -32,6 +32,8 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { generateSecretKey, getPublicKey, nip19 } from "nostr-tools";
 import { Check, Eye, EyeOff, Loader2, Lock, X } from "lucide-react";
+import { useNostrLogin } from "@nostrify/react/login";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { Logo } from "@/components/safesale/Logo";
 import { Button } from "@/components/ui/button";
@@ -132,9 +134,11 @@ function OpenShopForm() {
   const [isCreating, setIsCreating] = useState(false);
 
   const loginActions = useLoginActions();
+  const { logins, removeLogin } = useNostrLogin();
   const [, setCurrentSeller] = useCurrentSeller();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const handleValid = isHandleValid(handle);
   const shopNameValid = shopName.trim().length >= SHOP_NAME_MIN;
@@ -160,6 +164,32 @@ function OpenShopForm() {
         location: DEFAULT_LOCATION,
         category: DEFAULT_CATEGORY,
       });
+
+      // CRITICAL: clear every previously-stored session before persisting
+      // the new one. Without this, opening a second shop on the same
+      // browser ended up with `useCurrentUser()` returning the OLD login
+      // (because Nostrify keeps logins as an array and yields users[0]),
+      // while `useCurrentSeller()` returned the NEW seller record — so
+      // the dashboard's sidebar showed the new shop name while the
+      // listings query (`useMyListings`, which filters by `authors:
+      // [pubkey]`) ran against the OLD key and surfaced the old shop's
+      // products. Genuine trust bug: two real sellers on one device
+      // could see each other's data.
+      //
+      // Order matters:
+      //   1. Drop every existing Nostrify login (they're the ghost of
+      //      the previous account).
+      //   2. Drop the previous SafeSale seller record from localStorage.
+      //   3. Flush TanStack caches keyed on pubkey/npub (my-listings,
+      //      seller-orders) so the dashboard doesn't render stale data
+      //      from the old account while the new query is in flight.
+      //   4. ONLY THEN call addLogin + setCurrentSeller for the new one.
+      for (const existing of logins) {
+        removeLogin(existing.id);
+      }
+      setCurrentSeller(null);
+      queryClient.removeQueries({ queryKey: ["safesale", "my-listings"] });
+      queryClient.removeQueries({ queryKey: ["safesale", "seller-orders"] });
 
       // Now persist the login + seller record together. The nsec ends
       // up in localStorage via Nostrify's `addLogin` action.
@@ -268,9 +298,11 @@ function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
   const [signedInNpub, setSignedInNpub] = useState<string | null>(null);
 
   const loginActions = useLoginActions();
+  const { logins, removeLogin } = useNostrLogin();
   const [, setCurrentSeller] = useCurrentSeller();
   const navigate = useNavigate();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const reset = () => {
     setStage("paste");
@@ -309,6 +341,15 @@ function SignInWithNsecDialog({ open, onOpenChange }: SignInDialogProps) {
       // Derive the npub up-front so we can hand it to createSeller in
       // the next stage without storing the raw secret in React state.
       const npub = nip19.npubEncode(getPublicKey(decoded.data));
+
+      // Clear every previous session before swapping in this one — same
+      // multi-account contamination guard as OpenShopForm above.
+      for (const existing of logins) {
+        removeLogin(existing.id);
+      }
+      setCurrentSeller(null);
+      queryClient.removeQueries({ queryKey: ["safesale", "my-listings"] });
+      queryClient.removeQueries({ queryKey: ["safesale", "seller-orders"] });
 
       loginActions.nsec(trimmed);
       setSignedInNpub(npub);

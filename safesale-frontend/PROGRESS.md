@@ -15,9 +15,45 @@ Submission deadline: **4 days from 2026-05-23**. Realistic working window ≈ 50
 
 **Day 1 (today) — verify + design #5 in parallel**
 
-- [ ] **Integration smoke test against live Railway.** Non-negotiable; we haven't verified end-to-end since before #3 + #4 rewrites. `VITE_API_URL=https://safe-sales-backend-production.up.railway.app npm run dev` → walk full flow (onboard → list → buy → simulate Bitnob → ship → release). Document any breakages.
-- [ ] **Coordinate with Joy on three decisions:** (1) demo-mode payment trigger (curl `POST /api/webhooks/bitnob` or backend auto-advance flag); (2) Lightning payout gap — wire mainnet melt or accept as documented delta #2; (3) reviews (kind 1985) — ship `publishReview()` on release endpoint or stay placeholder.
-- [ ] **Draft screen #5 (Earnings) port spec** — skipping Stitch this round; it costs more time than the layout it produces. Direct React port spec instead.
+- [x] **Round 1 demo-blocking bug fixes** (commit `ccf70d9`): AppShell sidebar real seller; honest Bitnob disclaimer on Checkout; PublicListing fixture fallback killed; Landing previews labelled "Example."
+- [x] **Round 2 Landing fix** (commit `a89ce1c`): removed the over-aggressive auto-redirect; CTA buttons are now session-aware via `useCallToAction`.
+- [x] **Round 3 demo-blocking bug fixes** (this commit):
+  - **Multi-account contamination** (the critical one). Onboarding's both submit paths (open new shop + sign in with existing nsec) now clear every existing Nostrify login + the previous `currentSeller` + the relevant TanStack caches (`my-listings`, `seller-orders`) before adding the new login. Previously, creating a second shop on the same browser left the old login as `users[0]` (Nostrify treats logins as an array; `useCurrentUser` returns the first), so the sidebar showed the new shop name while the listings query ran against the old key and surfaced the old shop's products — genuine trust bug across accounts.
+  - **AppShell trust check.** Renders the seller record only when its stored npub matches the active login's pubkey. A stale `currentSeller` from a previous session no longer paints the wrong name in the sidebar.
+  - **MarketingLayout header is session-aware.** Logged out → "Sign in" + "Start selling." Logged in → avatar + "Go to dashboard." The "Sign in" button no longer appears after login. Mobile menu mirrors the same logic.
+  - **Mediator removed from public nav + footer.** Was leaking an "internal admin tools visible to anyone" impression at exactly the wrong moment.
+  - **`/admin` route gated by `MediatorGate`** (new component at `src/components/safesale/MediatorGate.tsx`). Reads `VITE_MEDIATOR_NPUB` (already in `.env.example`), compares against the active user's pubkey. Three branches: signed-out → "sign in as mediator" message; wrong-account → "switch accounts" message; mediator → renders children. Misconfiguration denies — never opens by default.
+  - **AppShell Logo + "Home" sub-link.** Logo links to `/app` (unchanged); a small `← Home` link to its right in the sidebar header gives sellers a one-click path back to Landing.
+  - **FinalCTA hidden when signed in.** "Start selling without fear today" is noise to existing sellers; hiding prevents accidental second-account creation.
+  - **TrustStrip rewritten as honest marquee.** Replaced fabricated vanity stats (`12.4k sellers`, `₦2.4B protected`, etc.) with genuine brand-pillar messages that don't pretend to be live metrics. Continuous CSS marquee, `motion-safe` only (respects `prefers-reduced-motion`). Hero's matching fake-stats line replaced with truthful value props.
+  - **FAQ rewritten honestly.** Previous answers promised LN payout in 60s (not wired), 1.5% fees (not implemented), card payments (not supported). New answers explicitly say what's deferred to post-hackathon, what's mocked, and what's cryptographically real today. Added a "why Nostr + Cashu" answer that's basically the pitch.
+- [ ] **Integration smoke test against live Railway.** Re-test the seller flow against `https://safe-sales-backend-production.up.railway.app` after this round.
+- [ ] **Coordinate with Joy on three decisions:** demo-mode payment trigger; Lightning payout scope; reviews (kind 1985) scope.
+- [ ] **Draft screen #5 (Earnings) port spec.**
+
+### Mediator access — the answer to "who can see the admin panel"
+
+A common question that came up during testing: *who is the "Mediator" / can I see the admin dashboard?*
+
+Three classes of user in SafeSale:
+
+| Role | How they sign up | Where they live in the app |
+|---|---|---|
+| Seller | `/onboarding` — generates a Nostr keypair, registers with backend `POST /api/sellers`, stores nsec in localStorage | `/app/*` (dashboard, listings, orders, earnings) |
+| Buyer | **No signup.** Frontend generates a one-time keypair on first checkout; nsec stored in localStorage under the order token | `/order/:token` only — the URL IS the credential |
+| Mediator | Holds the `MEDIATOR_NSEC`. For the hackathon, per Joy's `STATE.md`, `MEDIATOR_NSEC = SAFESALE_NSEC` (single brand key the team holds). In production this would split into separate per-mediator keys. | `/admin` only |
+
+**For the hackathon:** the mediator is **us** — you and Joy hold the key on the backend, and we'd manually resolve any disputes that came in. The `/admin` route is now gated by `VITE_MEDIATOR_NPUB`: anyone without that key sees "Access restricted" instead of the admin panel.
+
+This is also a real production-safety fix: previously `/admin` rendered for anyone who typed the URL.
+
+### Git sync plan
+
+GitHub reports `frontend` as "1 ahead, 6 behind" because every PR merge (`#1`…`#6`) creates a merge commit on `main` that isn't replayed back onto `frontend`. The 6 behind commits are all merges of our own frontend work (no foreign code from `backend` ever lands on `main` because Joy's work is in `safe-sales-backend/` — a different folder). It is safe to fast-rewind / merge `origin/main` into `frontend`.
+
+The simplest sync (recommended): after pushing today's commits to `frontend`, run `git merge origin/main` on `frontend` to absorb the PR-merge commits. This makes `frontend` strictly newer than `main` so subsequent PRs are clean fast-forwards.
+
+
 
 **Day 2 — screens #5 + #9 ported (with mocks where backend missing)**
 

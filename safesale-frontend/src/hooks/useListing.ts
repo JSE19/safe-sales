@@ -6,7 +6,10 @@
  * `safesale.app/buy/<id>`.
  *
  * Returns:
- *   - data: a parsed `NostrListing` with seller pubkey + structured tags
+ *   - data: a parsed `NostrListing` with seller pubkey + structured tags,
+ *           OR `null` when no event was found on the relay pool. The
+ *           consuming UI (`PublicListing.tsx`) handles `null` as a
+ *           "listing not loaded yet — refresh in a moment" empty state.
  *   - isLoading, error: from TanStack Query
  *
  * Behaviour:
@@ -18,10 +21,13 @@
  *      at least one `image`, a `price`). Events failing validation are
  *      treated the same as no event.
  *
- *   3. If no valid event comes back, falls back to a fixture listing
- *      from `src/lib/mock.ts` so demos run cold with no relays
- *      reachable. The fixture is wrapped in the same NostrListing
- *      shape so the consuming UI doesn't branch.
+ *   3. If no valid event comes back, returns `null`. We intentionally
+ *      do NOT fall back to `src/lib/mock.ts` fixtures — that was the
+ *      pre-launch demo safety net, and it was actively misleading
+ *      during real seller flows: clicking "View as buyer" on a real
+ *      listing would silently show Amaka's jacket whenever relays
+ *      lagged. Better to render an honest "not loaded" state and
+ *      retry than to lie about what the buyer is buying.
  *
  * Trust model: listings are public UGC (per nostr-security guidance,
  * no author filtering required). The seller's identity is published
@@ -32,8 +38,6 @@
 import type { NostrEvent } from "@nostrify/nostrify";
 import { useNostr } from "@nostrify/react";
 import { useQuery } from "@tanstack/react-query";
-
-import { getListing as getFixtureListing, getSeller } from "@/lib/mock";
 
 export interface NostrListing {
   /** The UUID from the `d` tag — same as the URL slug. */
@@ -59,10 +63,15 @@ export interface NostrListing {
   delivery?: string;
   /** Unix seconds — `published_at` tag or `created_at` of the event. */
   publishedAt: number;
-  /** True when this came from the local fixture, not a relay. */
+  /**
+   * @deprecated Always `false` now. Kept on the type so consumers don't
+   * have to change shape; the fixture-fallback path was removed in the
+   * 4-day demo bug-fix sprint. Remove this field in the post-submission
+   * refactor pass.
+   */
   fromFixture: boolean;
-  /** The raw event, when available (null when from fixture). */
-  event: NostrEvent | null;
+  /** The raw event. Always present now that fixture fallback is gone. */
+  event: NostrEvent;
 }
 
 /* ------------------------------ parsing ------------------------------- */
@@ -128,38 +137,6 @@ function parseListingEvent(event: NostrEvent): NostrListing | null {
   };
 }
 
-/* ----------------------- fixture fallback (demo) ---------------------- */
-
-function fixtureListing(id: string): NostrListing | null {
-  const listing = getFixtureListing(id);
-  if (!listing) return null;
-  const seller = getSeller(listing.sellerId);
-  return {
-    id: listing.id,
-    sellerPubkey: seller?.id ?? listing.sellerId,
-    title: listing.title,
-    summary: undefined,
-    description: listing.description,
-    // Fixtures use seeded placeholder images; the renderer (ProductImage)
-    // already knows how to handle the seed-based shape, but for the
-    // NostrListing contract we want URL strings only. Synthesize a
-    // unique deterministic "URL" per seed so anything URL-typed still
-    // gets a stable, distinct value.
-    images: listing.images.map(
-      (img) => `safesale://fixture-image/${listing.id}/${img.seed}`,
-    ),
-    priceNGN: listing.priceNGN,
-    priceSats: undefined,
-    inStock: listing.inStock,
-    category: listing.category.toLowerCase(),
-    tags: listing.variants ?? [],
-    delivery: listing.delivery,
-    publishedAt: Math.floor(new Date(listing.createdAt).getTime() / 1000),
-    fromFixture: true,
-    event: null,
-  };
-}
-
 /* --------------------------------- hook -------------------------------- */
 
 export function useListing(id: string | undefined) {
@@ -178,7 +155,8 @@ export function useListing(id: string | undefined) {
         );
         event = events[0];
       } catch {
-        // Relay errors fall through to the fixture fallback.
+        // Relay errors fall through to a null result; UI shows a
+        // "couldn't load listing, retry" state. Better than lying.
       }
 
       if (event) {
@@ -186,9 +164,10 @@ export function useListing(id: string | undefined) {
         if (parsed) return parsed;
       }
 
-      // No valid event found on relays — fall back to fixtures so demos
-      // work even when offline / no relays reachable.
-      return fixtureListing(id);
+      // No valid event found. Return null instead of a fixture so the
+      // buyer is never shown the wrong product. See file header for
+      // why this fallback was removed.
+      return null;
     },
     staleTime: 60 * 1000,
     retry: 1,

@@ -11,7 +11,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 import { useListing, type NostrListing } from "@/hooks/useListing";
 import { useAuthor } from "@/hooks/useAuthor";
-import { getSeller } from "@/lib/mock";
 import { genUserName } from "@/lib/genUserName";
 import { formatNGN, formatRelative } from "@/lib/format";
 import { cn, sanitizeUrl } from "@/lib/utils";
@@ -60,19 +59,29 @@ export default function PublicListing() {
 function PublicListingView({ listing }: { listing: NostrListing }) {
   const [activeImage, setActiveImage] = useState(0);
 
-  // Seller display: prefer real kind-0 metadata; fall back to the fixture
-  // record (so demos still show "Adaeze Stores" not a hex string).
+  // Seller display: read kind-0 metadata for name + picture; fall back
+  // to a deterministic generated handle so the buyer never sees a raw
+  // hex pubkey. Reputation fields (rating / reviewCount / completedOrders)
+  // are intentionally undefined for now — they'll surface once the
+  // backend publishes kind 1985 reviews on release (PRD delta #4).
   const author = useAuthor(listing.sellerPubkey);
-  const fixtureSeller = getSeller(listing.sellerPubkey);
   const sellerName =
     author.data?.metadata?.name ??
-    fixtureSeller?.name ??
+    author.data?.metadata?.display_name ??
     genUserName(listing.sellerPubkey);
   const sellerAvatarUrl = sanitizeUrl(author.data?.metadata?.picture);
-  const sellerVerified = fixtureSeller?.verified ?? false;
-  const sellerRating = fixtureSeller?.rating;
-  const sellerReviewCount = fixtureSeller?.reviews;
-  const sellerCompletedOrders = fixtureSeller?.completedOrders;
+  // Reputation fields wait on backend kind-1985 publishing (PRD delta #4);
+  // hidden behind opt-in nullables so the JSX conditionals re-light when
+  // we wire them.
+  const sellerVerified: boolean = false;
+  const reputation: {
+    rating?: number;
+    reviewCount?: number;
+    completedOrders?: number;
+  } = {};
+  const sellerRating = reputation.rating;
+  const sellerReviewCount = reputation.reviewCount;
+  const sellerCompletedOrders = reputation.completedOrders;
 
   const heroImage = listing.images[activeImage] ?? listing.images[0];
 
@@ -188,7 +197,7 @@ function PublicListingView({ listing }: { listing: NostrListing }) {
                     />
                   ) : (
                     <Avatar
-                      seed={fixtureSeller?.avatarSeed ?? listing.sellerPubkey}
+                      seed={listing.sellerPubkey}
                       name={sellerName}
                       size={48}
                     />
