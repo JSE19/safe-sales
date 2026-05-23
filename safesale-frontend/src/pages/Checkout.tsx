@@ -802,6 +802,11 @@ function Instructions({
         </div>
       </div>
 
+      <p className="mt-2 text-[11px] italic text-ink-soft">
+        Hackathon demo — Bitnob's bank rail is mocked; the Cashu escrow lock
+        on your payment is real, on Cashu testnet.
+      </p>
+
       {error && (
         <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
           {error}

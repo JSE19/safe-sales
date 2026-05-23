@@ -1,5 +1,6 @@
 import { useSeoMeta } from "@unhead/react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { MarketingLayout } from "@/components/safesale/MarketingLayout";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/safesale/Avatar";
@@ -21,17 +22,49 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { InstagramIcon } from "@/components/safesale/BrandIcons";
-import { listings, reviews, currentSeller } from "@/lib/mock";
 import { formatNGN } from "@/lib/format";
-import { useState } from "react";
 import { cn } from "@/lib/utils";
 
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { useCurrentSeller } from "@/hooks/useCurrentSeller";
+
+/**
+ * Marketing front door. Two responsibilities:
+ *
+ *   1. Tell new visitors what SafeSale is and route them into
+ *      `/onboarding`. The preview blocks on this page are intentionally
+ *      stylized as labelled examples — they don't claim to be real
+ *      sellers / real listings, so we never have to keep a fixture in
+ *      sync with the live database.
+ *
+ *   2. Bounce already-signed-in users straight to their dashboard.
+ *      Otherwise tapping "Start selling" from a logged-in browser tab
+ *      just bounces the user back to the same Landing page, which is
+ *      both confusing and a real bug we shipped before. Routing rule:
+ *
+ *        - logged in + has SafeSale seller profile  → /app
+ *        - logged in + no seller profile yet         → /onboarding
+ *        - logged out                                 → stay on Landing
+ *
+ *      `useCurrentUser` reads from Nostrify; `useCurrentSeller` reads
+ *      the SafeSale-specific record from localStorage that Onboarding
+ *      stores after POST /api/sellers.
+ */
 export default function Landing() {
   useSeoMeta({
     title: "SafeSale — Buy safely from social-media sellers",
     description:
       "SafeSale is escrow for social commerce. Buyers send money, sellers ship, and SafeSale holds the funds until everyone is happy. Works wherever you can paste a link.",
   });
+
+  const { user } = useCurrentUser();
+  const [seller] = useCurrentSeller();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!user) return;
+    navigate(seller ? "/app" : "/onboarding", { replace: true });
+  }, [user, seller, navigate]);
 
   return (
     <MarketingLayout>
@@ -47,6 +80,50 @@ export default function Landing() {
     </MarketingLayout>
   );
 }
+
+/* -------------------------------------------------------------------------- */
+/*                Stylized example data (no fixture coupling)                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * The hero phone mockup + seller-reputation block both used to read
+ * from `src/lib/mock.ts` — that file is being deleted before submission
+ * and the showcase blocks render best as **labelled examples**, not as
+ * a pretend real seller. Three small constants below give the preview
+ * blocks the data they need without coupling to anything live.
+ */
+
+const EXAMPLE_LISTING = {
+  title: "Vintage Denim Jacket — Ralph Lauren",
+  priceNGN: 28_500,
+  imageSeed: "vintage-denim-jacket",
+} as const;
+
+const EXAMPLE_SELLER = {
+  name: "Amaka O.",
+  handle: "amaka.thrift",
+  location: "Lagos, NG",
+  avatarSeed: "amaka-okafor-example",
+  rating: 4.9,
+  reviewCount: 184,
+  completedOrders: 312,
+  responseTimeMins: 9,
+} as const;
+
+const EXAMPLE_REVIEWS = [
+  {
+    id: "r1",
+    buyerName: "Tomiwa S.",
+    rating: 5,
+    text: "Item arrived in perfect condition. First time using escrow — I'd never go back to direct transfer.",
+  },
+  {
+    id: "r2",
+    buyerName: "Chioma N.",
+    rating: 5,
+    text: "Honest seller, fast shipping. The escrow gave me the confidence to actually pay.",
+  },
+] as const;
 
 /* -------------------------------------------------------------------------- */
 
@@ -96,7 +173,7 @@ function Hero() {
               size="lg"
               className="h-12 rounded-lg border-border bg-white px-6 text-base"
             >
-              <Link to="/buy/lst_jacket01">See a listing</Link>
+              <a href="#how-it-works">See how it works</a>
             </Button>
           </div>
 
@@ -141,25 +218,33 @@ function HeroMockup() {
               </span>
             </div>
             {/* listing preview */}
-            <div className="px-4 pb-5">
+            <div className="relative px-4 pb-5">
+              <span className="absolute right-6 top-1 z-10 inline-flex items-center rounded-full bg-ink/85 px-2 py-0.5 text-[10px] font-medium text-white">
+                Example
+              </span>
               <ProductImage
-                image={listings[0].images[0]}
+                image={{
+                  seed: EXAMPLE_LISTING.imageSeed,
+                  hueA: 162,
+                  hueB: 200,
+                  label: EXAMPLE_LISTING.title,
+                }}
                 className="aspect-[5/4]"
                 rounded="rounded-2xl"
               />
               <div className="mt-4 flex items-center gap-2">
                 <Avatar
-                  seed={currentSeller.avatarSeed}
-                  name={currentSeller.name}
+                  seed={EXAMPLE_SELLER.avatarSeed}
+                  name={EXAMPLE_SELLER.name}
                   size={28}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[13px] font-medium text-ink">
-                    {currentSeller.name}
+                    {EXAMPLE_SELLER.name}
                   </p>
                   <div className="flex items-center gap-1 text-[11px] text-ink-soft">
-                    <StarRating rating={currentSeller.rating} size={11} />
-                    <span>· {currentSeller.reviews} reviews</span>
+                    <StarRating rating={EXAMPLE_SELLER.rating} size={11} />
+                    <span>· {EXAMPLE_SELLER.reviewCount} reviews</span>
                   </div>
                 </div>
                 <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-medium text-brand-soft-foreground">
@@ -167,12 +252,17 @@ function HeroMockup() {
                 </span>
               </div>
               <h3 className="mt-3 text-[15px] font-semibold leading-snug text-ink">
-                {listings[0].title}
+                {EXAMPLE_LISTING.title}
               </h3>
               <p className="mt-1 text-lg font-semibold text-ink">
-                {formatNGN(listings[0].priceNGN)}
+                {formatNGN(EXAMPLE_LISTING.priceNGN)}
               </p>
-              <button className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 text-sm font-semibold text-brand-foreground">
+              <button
+                type="button"
+                disabled
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 text-sm font-semibold text-brand-foreground opacity-90"
+                aria-label="Example buy button (not interactive)"
+              >
                 <Lock className="h-4 w-4" />
                 Buy safely with escrow
               </button>
@@ -415,36 +505,39 @@ function SellerReputation() {
     <section className="container py-20">
       <div className="grid items-center gap-12 lg:grid-cols-2">
         <div className="order-2 lg:order-1">
-          <div className="rounded-2xl border border-border bg-white p-6 shadow-[0_24px_60px_-30px_rgba(15,42,30,0.2)]">
+          <div className="relative rounded-2xl border border-border bg-white p-6 shadow-[0_24px_60px_-30px_rgba(15,42,30,0.2)]">
+            <span className="absolute right-4 top-4 inline-flex items-center rounded-full bg-ink/85 px-2 py-0.5 text-[10px] font-medium text-white">
+              Example seller
+            </span>
             <div className="flex items-center gap-4">
               <Avatar
-                seed={currentSeller.avatarSeed}
-                name={currentSeller.name}
+                seed={EXAMPLE_SELLER.avatarSeed}
+                name={EXAMPLE_SELLER.name}
                 size={56}
               />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <p className="truncate text-base font-semibold text-ink">
-                    {currentSeller.name}
+                    {EXAMPLE_SELLER.name}
                   </p>
                   <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-medium text-brand-soft-foreground">
                     <ShieldCheck className="h-3 w-3" /> Verified
                   </span>
                 </div>
                 <p className="truncate text-sm text-ink-soft">
-                  @{currentSeller.handle} · {currentSeller.location}
+                  @{EXAMPLE_SELLER.handle} · {EXAMPLE_SELLER.location}
                 </p>
               </div>
             </div>
 
             <div className="mt-5 grid grid-cols-3 divide-x divide-border rounded-xl border border-border bg-surface-2/40">
-              <Stat label="Rating" value={currentSeller.rating.toFixed(1)} subtext={`${currentSeller.reviews} reviews`} />
-              <Stat label="Orders" value={String(currentSeller.completedOrders)} subtext="completed" />
-              <Stat label="Replies in" value={`${currentSeller.responseTimeMins}m`} subtext="avg" />
+              <Stat label="Rating" value={EXAMPLE_SELLER.rating.toFixed(1)} subtext={`${EXAMPLE_SELLER.reviewCount} reviews`} />
+              <Stat label="Orders" value={String(EXAMPLE_SELLER.completedOrders)} subtext="completed" />
+              <Stat label="Replies in" value={`${EXAMPLE_SELLER.responseTimeMins}m`} subtext="avg" />
             </div>
 
             <div className="mt-5 space-y-3">
-              {reviews.slice(0, 2).map((r) => (
+              {EXAMPLE_REVIEWS.map((r) => (
                 <div
                   key={r.id}
                   className="rounded-xl border border-border bg-surface-2/30 p-3"
@@ -741,7 +834,7 @@ function FinalCTA() {
             variant="outline"
             className="h-12 rounded-lg border-white/40 bg-transparent px-6 text-base text-white hover:bg-white/10 hover:text-white"
           >
-            <Link to="/buy/lst_jacket01">See a buyer's view</Link>
+            <a href="#how-it-works">See how it works</a>
           </Button>
         </div>
         <p className="relative mt-6 inline-flex items-center gap-2 text-xs text-emerald-50/80">

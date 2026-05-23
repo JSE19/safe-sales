@@ -15,7 +15,13 @@ Submission deadline: **4 days from 2026-05-23**. Realistic working window ≈ 50
 
 **Day 1 (today) — verify + design #5 in parallel**
 
-- [ ] **Integration smoke test against live Railway.** Non-negotiable; we haven't verified end-to-end since before #3 + #4 rewrites. `VITE_API_URL=https://safe-sales-backend-production.up.railway.app npm run dev` → walk full flow (onboard → list → buy → simulate Bitnob → ship → release). Document any breakages.
+- [x] **Demo-blocking bug fixes from manual seller-flow test** (commit pending after this checkpoint):
+  - AppShell sidebar + mobile avatar no longer hardcode "Amaka Okafor" from `lib/mock`; now read `useCurrentSeller` + `useCurrentUser` with a friendly "Sign in" fallback. Also dropped the fake "Payment of ₦42,000 released" notification panel for an honest "you're all caught up" empty state.
+  - Landing now redirects logged-in users: `seller` set → `/app`, otherwise → `/onboarding`. Before, the "Start selling" CTA bounced you back to the same page when already signed in.
+  - Landing's two "See a listing" / "See a buyer's view" CTAs (which pointed at a hardcoded fixture id `lst_jacket01`) replaced with `#how-it-works` anchor jumps. The HeroMockup + SellerReputation preview blocks now use stylized `EXAMPLE_*` constants with a visible "Example" / "Example seller" badge so judges read them as marketing examples, not real-product showcases. No more `lib/mock` import in Landing.
+  - Checkout now carries an italic honest disclaimer under the bank-account block: *"Hackathon demo — Bitnob's bank rail is mocked; the Cashu escrow lock on your payment is real, on Cashu testnet."* Owns PRD delta #3 in the surface where it matters most (the buyer's "where does my money go" moment).
+  - `useListing` no longer silently falls back to the mock fixture when Nostr returns no event. Returns `null` so `PublicListing` shows its existing "not found" empty state. PublicListing also lost the `getSeller` mock coupling for the same reason — seller name now comes from `useAuthor` kind-0 metadata + `genUserName` fallback. Reputation block (rating/reviews/completedOrders) hidden until backend publishes kind 1985 on release (PRD delta #4).
+- [ ] **Integration smoke test against live Railway.** `VITE_API_URL=https://safe-sales-backend-production.up.railway.app npm run dev` → walk full flow (onboard → list → buy → simulate Bitnob → ship → release). Will run next, now that the obvious bugs are out of the way.
 - [ ] **Coordinate with Joy on three decisions:** (1) demo-mode payment trigger (curl `POST /api/webhooks/bitnob` or backend auto-advance flag); (2) Lightning payout gap — wire mainnet melt or accept as documented delta #2; (3) reviews (kind 1985) — ship `publishReview()` on release endpoint or stay placeholder.
 - [ ] **Draft screen #5 (Earnings) port spec** — skipping Stitch this round; it costs more time than the layout it produces. Direct React port spec instead.
 
