@@ -7,6 +7,63 @@
 
 ---
 
+## 🚨 4-day demo countdown — Hack4Freedom plan (added Day 1)
+
+Submission deadline: **4 days from 2026-05-23**. Realistic working window ≈ 50–60 hours. Plan is aggressively scoped to prefer reliability + a clean pitch over feature breadth.
+
+### Daily plan
+
+**Day 1 (today) — verify + design #5 in parallel**
+
+- [ ] **Integration smoke test against live Railway.** Non-negotiable; we haven't verified end-to-end since before #3 + #4 rewrites. `VITE_API_URL=https://safe-sales-backend-production.up.railway.app npm run dev` → walk full flow (onboard → list → buy → simulate Bitnob → ship → release). Document any breakages.
+- [ ] **Coordinate with Joy on three decisions:** (1) demo-mode payment trigger (curl `POST /api/webhooks/bitnob` or backend auto-advance flag); (2) Lightning payout gap — wire mainnet melt or accept as documented delta #2; (3) reviews (kind 1985) — ship `publishReview()` on release endpoint or stay placeholder.
+- [ ] **Draft screen #5 (Earnings) port spec** — skipping Stitch this round; it costs more time than the layout it produces. Direct React port spec instead.
+
+**Day 2 — screens #5 + #9 ported (with mocks where backend missing)**
+
+- [ ] **Port screen #5 (Earnings)** — read `useSellerOrders`, sum sats across `completed` orders for the monthly total; list completed orders as payout history. "Cash out to Naira" = honest "coming soon" toast. Flip to ✅ with note "wired to seller-orders aggregation; awaiting `/api/earnings` for real payout history."
+- [ ] **Port screen #9 (Admin Dispute Dashboard)** — static fixture of 3–4 example disputes, "Resolve" action toasts. Flip to ✅ with note "static demo surface; awaiting backend admin endpoints."
+- [ ] **All 9 screens design-complete by Day 2 evening.**
+
+**Day 3 — polish, deploy, dry-run**
+
+- [ ] **Morning polish pass (~2 hrs total):** consolidate the 4 inlined `ListingThumb` helpers into one shared component (PROGRESS.md "Refactor pass before launch" line 92); add a global TanStack Query error boundary; audit every mutation button for visible `Loader2` state; remove any stray `console.log`.
+- [ ] **Deploy to Vercel** with `VITE_API_URL` pointing at Railway. Tell Joy to append the Vercel URL to her `FRONTEND_ORIGINS` env var (one Railway env change on her side; per her STATE.md).
+- [ ] **Full dry-run with Joy on video call** — run + record the demo end-to-end on the deployed URL. Time it. Anything >5 min, cut. Identify any remaining UX issue, fix that evening.
+- [ ] **Evening: open + merge `frontend → main` and `backend → main` PRs together.** Tag `hack4freedom-submission-v1` on `main`.
+
+**Day 4 — submission + rehearsal + contingency**
+
+- [ ] **Write submission README** with project description, the Nigerian seller market story leading, screenshots, then technical detail. Include a "Hackathon MVP scope" section documenting the PRD deltas explicitly (own them, don't hide them).
+- [ ] **Delete `.md` files we won't ship** as part of the final pre-submission commit: `PROGRESS.md`, `AGENTS.md`, `BUSINESS.md`, all `.stitch-designs/`. Keep: `README.md`, `NIP.md`, possibly trimmed `PRD.md`.
+- [ ] **Rehearse the pitch 5+ times.** Most teams lose points on muddled narration — product can be 7/10 + pitch 9/10 beats 9/10 + 7/10.
+- [ ] **Backup plan:** 90-second screen recording of the working flow saved locally, ready to play if Railway or wifi fails on stage.
+- [ ] **Rest before demo day.**
+
+### The Lightning payout gap — pitch line (instead of wiring mainnet)
+
+The single biggest hole in the freedom-tech story. Resolution: **don't try to fix in 4 days; own it in the pitch.**
+
+> *"For the hackathon we're running on Cashu testnut, which can mint and verify P2PK locks but can't melt to a mainnet Lightning wallet. The seller release fully completes the cryptographic guarantee — buyer's signature proves consent, the mint enforces it. Mainnet swap is a config change for post-hackathon, not a re-architecture."*
+
+Plus: surface `redeemedSats` (returned by `apiClient.releaseOrder`) on the completed-order UI as a "Settled · {N} sats" line so the demo visibly shows the settlement number even though no LN melt happens. ~30 min of work; already partially in `BuyerOrder.tsx`; verify on the seller side too.
+
+### Coordination touchpoints with Joy (the only 3)
+
+| When | What |
+|---|---|
+| **Day 1** | 3 decisions: payment trigger, LN scope, reviews scope |
+| **Day 2 evening** | Confirm 9/9 frontend + admin/earnings backend status |
+| **Day 3 afternoon** | Full live demo together, recorded |
+
+Nothing more. Anything else is process-for-process's-sake.
+
+### Win odds — honest
+
+Top 3: ~30–40%. Outright win: ~10–15%. The cryptographic trust story is real, the market is specific and underserved, and 8/9 (soon 9/9) screens are polished. The three things that move odds up: (1) closing or cleanly explaining the LN gap, (2) rehearsing pitch 5+ times, (3) leading with the Nigerian seller market story before any technical content.
+
+---
+
 ## Design system contract (applies to every prompt)
 
 - React + TypeScript single component, no `any` types.
