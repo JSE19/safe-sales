@@ -6,13 +6,24 @@
  * so this page agrees with the dashboard at all times — both surfaces
  * key off the same TanStack Query cache and refresh together.
  *
- * Each row links to `/app/orders/<orderToken>` (the seller order detail
- * page, also fully wired in Phase 8 step C).
+ * Design ported from `.stitch-designs/04-seller-orders.html` — same
+ * recipe used on screens #2 and #3: Stitch shipped the right layout
+ * (heading row → attention strip → search/filter chips → desktop
+ * table + mobile cards), but in Material Design tokens with a violet
+ * primary, custom sidebar, Material Symbols, and invented fields
+ * (BTC conversion, member-since, shipping fees) that don't exist on
+ * our `SellerOrderRow`. All of those are stripped here; the page
+ * uses SafeSale tokens + lucide-react + the existing `EscrowStatusPill`
+ * primitive (which already supports all 7 statuses).
  *
- * Previous version of this file pulled from `lib/mock.ts` fixtures —
- * confusing because the dashboard claimed "3 orders to ship" while
- * this list showed entirely different fixture orders. Step-tidy in
- * the same Phase 8 effort.
+ * Each row links to `/app/orders/<orderToken>` (the seller order
+ * detail page, also fully wired in Phase 8 step C).
+ *
+ * Filter chips intentionally omit `pending_payment` as a top-level
+ * chip — those orders are informational (the seller can't act on
+ * them), so they only appear under "All". `payment_locked + disputed`
+ * are what surface in the amber "Needs your attention" strip at the
+ * top of the page; same source of truth as the dashboard's same strip.
  */
 
 import { useSeoMeta } from "@unhead/react";
@@ -20,19 +31,30 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { AppShell } from "@/components/safesale/AppShell";
-import { Avatar } from "@/components/safesale/Avatar";
 import { EscrowStatusPill } from "@/components/safesale/EscrowStatus";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChevronRight, Filter, PackageCheck, Search } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronRight,
+  Package,
+  Search,
+  User,
+} from "lucide-react";
 
 import { useCurrentSeller } from "@/hooks/useCurrentSeller";
 import { useSellerOrders } from "@/hooks/useSellerOrders";
-import type { ApiListingImage, ApiOrderStatus, SellerOrderRow } from "@/lib/api";
+import type {
+  ApiListingImage,
+  ApiOrderStatus,
+  SellerOrderRow,
+} from "@/lib/api";
 import { formatNGN, formatRelative } from "@/lib/format";
 import { cn, sanitizeUrl } from "@/lib/utils";
 
-type FilterKey = "all" | "active" | "shipped" | "completed" | "disputed";
+/* ------------------------------ filter spec ----------------------------- */
+
+type FilterKey = "all" | "to_ship" | "shipped" | "completed" | "disputed" | "refunded";
 
 interface FilterSpec {
   key: FilterKey;
@@ -40,21 +62,25 @@ interface FilterSpec {
   matches: (s: ApiOrderStatus) => boolean;
 }
 
+/**
+ * Six chips, in display order. `pending_payment` deliberately isn't a
+ * chip — those rows are read-only (seller can't act on them). They show
+ * up under "All" only. Same six categories as the dashboard.
+ */
 const FILTERS: FilterSpec[] = [
   { key: "all", label: "All", matches: () => true },
-  {
-    key: "active",
-    label: "Needs action",
-    matches: (s) => s === "pending_payment" || s === "payment_locked",
-  },
+  { key: "to_ship", label: "To ship", matches: (s) => s === "payment_locked" },
   {
     key: "shipped",
     label: "Shipped",
     matches: (s) => s === "shipped" || s === "delivered",
   },
   { key: "completed", label: "Completed", matches: (s) => s === "completed" },
-  { key: "disputed", label: "Disputes", matches: (s) => s === "disputed" },
+  { key: "disputed", label: "Disputed", matches: (s) => s === "disputed" },
+  { key: "refunded", label: "Refunded", matches: (s) => s === "refunded" },
 ];
+
+/* ------------------------------------- page ---------------------------------- */
 
 export default function OrdersPage() {
   useSeoMeta({ title: "Orders — SafeSale" });
@@ -63,6 +89,31 @@ export default function OrdersPage() {
   const { orders, isLoading } = useSellerOrders();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
+
+  /* Live counts per filter — drive the chip badges. */
+  const filterCounts = useMemo(() => {
+    const counts: Record<FilterKey, number> = {
+      all: orders.length,
+      to_ship: 0,
+      shipped: 0,
+      completed: 0,
+      disputed: 0,
+      refunded: 0,
+    };
+    for (const o of orders) {
+      for (const f of FILTERS) {
+        if (f.key !== "all" && f.matches(o.status)) counts[f.key] += 1;
+      }
+    }
+    return counts;
+  }, [orders]);
+
+  /* Needs-attention strip: payment_locked + disputed. */
+  const attention = useMemo(() => {
+    const toShip = orders.filter((o) => o.status === "payment_locked").length;
+    const disputed = orders.filter((o) => o.status === "disputed").length;
+    return { toShip, disputed, total: toShip + disputed };
+  }, [orders]);
 
   const filtered = useMemo(() => {
     const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
@@ -86,60 +137,20 @@ export default function OrdersPage() {
 
   return (
     <AppShell title="Orders" subtitle={subtitle}>
-      <div className="space-y-4">
-        {/* Search + filters */}
-        <div className="space-y-3">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-soft" />
-            <Input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by order ID, buyer name, or item"
-              className="h-11 pl-9"
-            />
-          </div>
+      <div className="space-y-6">
+        {/* 1. Needs-your-attention strip — only when there's actually something */}
+        {attention.total > 0 && <AttentionStrip {...attention} />}
 
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {FILTERS.map((f) => {
-              const count = orders.filter((o) => f.matches(o.status)).length;
-              const isActive = filter === f.key;
-              return (
-                <button
-                  key={f.key}
-                  type="button"
-                  onClick={() => setFilter(f.key)}
-                  className={cn(
-                    "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
-                    isActive
-                      ? "border-brand bg-brand text-brand-foreground"
-                      : "border-border bg-white text-ink-soft hover:text-ink",
-                  )}
-                >
-                  {f.label}
-                  <span
-                    className={cn(
-                      "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
-                      isActive
-                        ? "bg-white/15 text-white"
-                        : "bg-secondary text-ink-soft",
-                    )}
-                  >
-                    {count}
-                  </span>
-                </button>
-              );
-            })}
-            <button
-              type="button"
-              aria-label="More filters"
-              className="ml-auto hidden h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border text-ink-soft hover:text-ink lg:inline-flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-            >
-              <Filter className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
+        {/* 2. Search + filter chips */}
+        <SearchAndFilters
+          query={query}
+          onQueryChange={setQuery}
+          filter={filter}
+          onFilterChange={setFilter}
+          counts={filterCounts}
+        />
 
-        {/* Body */}
+        {/* 3. Body */}
         {isLoading ? (
           <ListSkeleton />
         ) : !seller ? (
@@ -147,115 +158,275 @@ export default function OrdersPage() {
         ) : orders.length === 0 ? (
           <NeverHadAnOrderEmpty />
         ) : filtered.length === 0 ? (
-          <FilteredEmpty filter={filter} query={query} />
+          <FilteredEmpty
+            query={query}
+            onClear={() => {
+              setQuery("");
+              setFilter("all");
+            }}
+          />
         ) : (
-          <ul className="space-y-3">
-            {filtered.map((o) => (
-              <OrderRow key={o.orderToken} order={o} />
-            ))}
-          </ul>
+          <>
+            {/* Desktop table */}
+            <div className="hidden overflow-hidden rounded-2xl border border-border bg-white sm:block">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-border bg-surface text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+                  <tr>
+                    <th className="px-4 py-3">Order</th>
+                    <th className="px-4 py-3">Buyer</th>
+                    <th className="px-4 py-3">Amount</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3 text-right">Updated</th>
+                    <th className="w-10" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {filtered.map((o) => (
+                    <OrderTableRow key={o.orderToken} order={o} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <ul className="space-y-3 sm:hidden">
+              {filtered.map((o) => (
+                <OrderMobileCard key={o.orderToken} order={o} />
+              ))}
+            </ul>
+          </>
         )}
       </div>
     </AppShell>
   );
 }
 
-/* -------------------------------- rows -------------------------------- */
+/* -------------------------- attention strip --------------------------- */
 
-function OrderRow({ order }: { order: SellerOrderRow }) {
+function AttentionStrip({
+  toShip,
+  disputed,
+  total,
+}: {
+  toShip: number;
+  disputed: number;
+  total: number;
+}) {
+  const breakdown: string[] = [];
+  if (toShip > 0) breakdown.push(`${toShip} to ship`);
+  if (disputed > 0)
+    breakdown.push(`${disputed} ${disputed === 1 ? "disputed" : "disputed"}`);
+
+  const headline =
+    total === 1
+      ? "1 order needs your action."
+      : `You have ${total} orders that need action.`;
+
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:p-5">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800">
+        <AlertTriangle className="h-5 w-5" aria-hidden />
+      </div>
+      <p className="flex-1 text-sm font-medium text-amber-900">{headline}</p>
+      {breakdown.length > 0 && (
+        <p className="text-xs text-amber-800">{breakdown.join(" · ")}</p>
+      )}
+    </div>
+  );
+}
+
+/* ----------------------- search + filter chips ----------------------- */
+
+function SearchAndFilters({
+  query,
+  onQueryChange,
+  filter,
+  onFilterChange,
+  counts,
+}: {
+  query: string;
+  onQueryChange: (v: string) => void;
+  filter: FilterKey;
+  onFilterChange: (k: FilterKey) => void;
+  counts: Record<FilterKey, number>;
+}) {
+  return (
+    <div className="space-y-3 rounded-2xl border border-border bg-white p-4">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-soft" />
+        <Input
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
+          placeholder="Search by buyer, order id, or product"
+          className="h-10 pl-10"
+          aria-label="Search orders"
+        />
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {FILTERS.map((f) => {
+          const count = counts[f.key];
+          const isActive = filter === f.key;
+          return (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => onFilterChange(f.key)}
+              className={cn(
+                "inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-full border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+                isActive
+                  ? "border-brand-soft bg-brand-soft text-brand-soft-foreground"
+                  : "border-border bg-white text-ink-soft hover:text-ink",
+                !isActive && count === 0 && "opacity-60",
+              )}
+            >
+              {f.label}
+              <span
+                className={cn(
+                  "ml-1.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums",
+                  isActive ? "bg-white/50 text-current" : "bg-surface text-ink-soft",
+                )}
+              >
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------- desktop table row --------------------------- */
+
+function OrderTableRow({ order }: { order: SellerOrderRow }) {
+  return (
+    <tr className="group transition-colors hover:bg-surface focus-within:bg-surface">
+      <td className="px-4 py-3 align-middle">
+        <Link
+          to={`/app/orders/${order.orderToken}`}
+          className="flex items-center gap-3 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+        >
+          <ListingThumb
+            image={order.listing.images[0]}
+            alt={order.listing.title}
+            size={48}
+          />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-ink">
+              {order.listing.title}
+            </p>
+            <p className="mt-0.5 truncate font-mono text-[11px] tabular-nums text-ink-soft">
+              {order.shortId}
+              {order.variant ? ` · ${order.variant}` : ""}
+            </p>
+          </div>
+        </Link>
+      </td>
+      <td className="px-4 py-3 align-middle">
+        <p className="truncate text-sm text-ink">{order.buyerName}</p>
+        <p className="mt-0.5 truncate text-xs text-ink-soft">{order.buyerCity}</p>
+      </td>
+      <td className="px-4 py-3 align-middle">
+        <p className="text-sm font-semibold tabular-nums text-ink">
+          {formatNGN(order.amountNGN)}
+        </p>
+        <p className="mt-0.5 text-[11px] tabular-nums text-ink-soft">
+          {order.amountSats.toLocaleString()} sats
+        </p>
+      </td>
+      <td className="px-4 py-3 align-middle">
+        <EscrowStatusPill status={order.status} size="sm" />
+      </td>
+      <td className="px-4 py-3 align-middle text-right">
+        <p className="text-xs text-ink-soft">
+          {formatRelative(order.updatedAt)}
+        </p>
+      </td>
+      <td className="w-10 px-2 align-middle text-right">
+        <ChevronRight className="h-4 w-4 text-ink-soft" aria-hidden />
+      </td>
+    </tr>
+  );
+}
+
+/* --------------------------- mobile card row --------------------------- */
+
+function OrderMobileCard({ order }: { order: SellerOrderRow }) {
   return (
     <li>
       <Link
         to={`/app/orders/${order.orderToken}`}
-        className="block overflow-hidden rounded-2xl border border-border bg-white p-4 transition-all hover:-translate-y-0.5 hover:shadow-[0_12px_30px_-16px_rgba(15,42,30,0.18)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+        className="block rounded-2xl border border-border bg-white p-4 transition-colors active:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
       >
-        <div className="flex items-start gap-3">
-          <ListingThumb image={order.listing.images[0]} alt={order.listing.title} />
+        <div className="flex items-center gap-3">
+          <ListingThumb
+            image={order.listing.images[0]}
+            alt={order.listing.title}
+            size={48}
+          />
           <div className="min-w-0 flex-1">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-ink">
-                  {order.listing.title}
-                </p>
-                <p className="mt-0.5 text-xs text-ink-soft">
-                  {order.shortId} · {formatRelative(order.createdAt)}
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 shrink-0 text-ink-soft" />
-            </div>
-
-            <div className="mt-3 flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
-                <Avatar
-                  seed={order.buyerName}
-                  name={order.buyerName}
-                  size={22}
-                />
-                <span className="truncate text-xs text-ink-soft">
-                  {order.buyerName} · {order.buyerCity}
-                </span>
-              </div>
-              <p className="shrink-0 text-sm font-semibold tabular-nums text-ink">
-                {formatNGN(order.amountNGN)}
-              </p>
-            </div>
+            <p className="truncate text-sm font-medium text-ink">
+              {order.listing.title}
+            </p>
+            <p className="mt-0.5 truncate font-mono text-[11px] tabular-nums text-ink-soft">
+              {order.shortId}
+              {order.variant ? ` · ${order.variant}` : ""}
+            </p>
           </div>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
           <EscrowStatusPill status={order.status} size="sm" />
-          <div className="flex items-center gap-2 text-[11px] text-ink-soft">
-            {order.trackingNumber && (
-              <span className="rounded-md bg-secondary px-2 py-0.5">
-                {(order.carrier ?? "Carrier")} · {order.trackingNumber}
-              </span>
-            )}
-            {order.status === "payment_locked" && (
-              <span className="rounded-md bg-brand-soft px-2 py-0.5 text-brand-soft-foreground">
-                Ready to ship
-              </span>
-            )}
-            {order.status === "delivered" && (
-              <span className="rounded-md bg-indigo-50 px-2 py-0.5 text-indigo-700">
-                Awaiting buyer confirm
-              </span>
-            )}
-            {order.status === "disputed" && (
-              <span className="rounded-md bg-amber-100 px-2 py-0.5 text-amber-800">
-                Needs response
-              </span>
-            )}
+        </div>
+
+        <div className="mt-3 flex items-baseline justify-between gap-3">
+          <p className="truncate text-xs text-ink-soft">
+            {order.buyerName}, {order.buyerCity}
+          </p>
+          <div className="shrink-0 text-right">
+            <p className="text-sm font-semibold tabular-nums text-ink">
+              {formatNGN(order.amountNGN)}
+            </p>
+            <p className="mt-0.5 text-[11px] tabular-nums text-ink-soft">
+              {order.amountSats.toLocaleString()} sats
+            </p>
           </div>
         </div>
+
+        <p className="mt-2 text-[11px] text-ink-soft">
+          Updated · {formatRelative(order.updatedAt)}
+        </p>
       </Link>
     </li>
   );
 }
 
-/* ------------------------------ thumbnails ---------------------------- */
+/* ------------------------------ thumbnails ----------------------------- */
 
 /**
- * The shared `ProductImage` only renders gradient placeholders from
- * seeds. Backend listings carry Blossom URLs, so we mirror the same
- * tiny URL-or-gradient contract used elsewhere (BuyerOrder.tsx,
- * OrderDetailPage.tsx). Cloned again; collapse into a shared component
- * in the refactor pass once #3 and #4 are done.
+ * Backend listings carry Blossom URLs; fixture / seed-only listings fall
+ * back to a deterministic gradient placeholder. This helper is cloned in
+ * three files (here, OrderDetailPage.tsx, BuyerOrder.tsx) — collapse in
+ * the post-launch refactor pass scoped in PROGRESS.md.
  */
 function ListingThumb({
   image,
   alt,
+  size,
 }: {
   image: ApiListingImage | undefined;
   alt: string;
+  size: number;
 }) {
   const url = image?.url ? sanitizeUrl(image.url) : undefined;
+  const cls = "shrink-0 rounded-xl object-cover";
+  const dim = { width: size, height: size };
   if (url) {
     return (
       <img
         src={url}
         alt={alt}
         loading="lazy"
-        className="h-16 w-16 shrink-0 rounded-xl object-cover"
+        className={cls}
+        style={dim}
       />
     );
   }
@@ -263,12 +434,13 @@ function ListingThumb({
   return (
     <div
       aria-hidden
-      className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl text-ink-soft"
+      className="flex shrink-0 items-center justify-center rounded-xl bg-surface text-ink-soft"
       style={{
-        background: `linear-gradient(135deg, hsl(${(hash(seed) % 360 + 360) % 360} 35% 88%), hsl(${(hash(seed) * 7 % 360 + 360) % 360} 30% 80%))`,
+        ...dim,
+        background: `linear-gradient(135deg, hsl(${((hash(seed) % 360) + 360) % 360} 35% 88%), hsl(${(((hash(seed) * 7) % 360) + 360) % 360} 30% 80%))`,
       }}
     >
-      <PackageCheck className="h-6 w-6 opacity-50" />
+      <Package className="h-5 w-5 opacity-60" />
     </div>
   );
 }
@@ -279,71 +451,135 @@ function hash(s: string): number {
   return h;
 }
 
-/* ------------------------- skeleton + empties ------------------------- */
+/* ------------------------- skeleton + empties -------------------------- */
 
 function ListSkeleton() {
   return (
-    <ul className="space-y-3">
-      {[0, 1, 2].map((i) => (
-        <li
-          key={i}
-          className="overflow-hidden rounded-2xl border border-border bg-white p-4"
-        >
-          <div className="flex gap-3">
-            <Skeleton className="h-16 w-16 rounded-xl" />
-            <div className="flex-1 space-y-2">
-              <Skeleton className="h-4 w-2/3" />
-              <Skeleton className="h-3 w-1/3" />
-              <Skeleton className="h-3 w-1/2" />
+    <>
+      {/* Desktop table skeleton */}
+      <div className="hidden overflow-hidden rounded-2xl border border-border bg-white sm:block">
+        <table className="w-full">
+          <tbody className="divide-y divide-border">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <tr key={i}>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="h-12 w-12 rounded-xl" />
+                    <div className="space-y-2">
+                      <Skeleton className="h-4 w-48" />
+                      <Skeleton className="h-3 w-24" />
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-28" />
+                    <Skeleton className="h-3 w-20" />
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  <Skeleton className="h-4 w-20" />
+                </td>
+                <td className="px-4 py-3">
+                  <Skeleton className="h-6 w-24 rounded-full" />
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <Skeleton className="ml-auto h-3 w-16" />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile cards skeleton */}
+      <ul className="space-y-3 sm:hidden">
+        {[0, 1, 2].map((i) => (
+          <li
+            key={i}
+            className="rounded-2xl border border-border bg-white p-4"
+          >
+            <div className="flex items-center gap-3">
+              <Skeleton className="h-12 w-12 rounded-xl" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-4 w-2/3" />
+                <Skeleton className="h-3 w-1/3" />
+              </div>
+              <Skeleton className="h-6 w-20 rounded-full" />
             </div>
-          </div>
-        </li>
-      ))}
-    </ul>
+            <div className="mt-3 flex justify-between">
+              <Skeleton className="h-3 w-32" />
+              <Skeleton className="h-4 w-20" />
+            </div>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
 function NotSignedUpEmpty() {
   return (
-    <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center">
-      <p className="text-sm font-medium text-ink">Sign up to see orders</p>
-      <p className="mx-auto mt-1 max-w-xs text-xs text-ink-soft">
-        Open your SafeSale shop first — orders appear here once buyers start
-        paying.
+    <div className="rounded-2xl border border-dashed border-border bg-white p-10 text-center">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-surface text-ink-soft">
+        <User className="h-7 w-7" aria-hidden />
+      </div>
+      <p className="mt-4 text-base font-semibold text-ink">
+        Finish signing up to see your orders
       </p>
+      <p className="mx-auto mt-2 max-w-sm text-sm text-ink-soft">
+        You need a seller profile before orders can land here.
+      </p>
+      <Link
+        to="/onboarding"
+        className="mt-5 inline-flex h-11 items-center rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+      >
+        Complete signup
+      </Link>
     </div>
   );
 }
 
 function NeverHadAnOrderEmpty() {
   return (
-    <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center">
-      <p className="text-sm font-medium text-ink">No orders yet</p>
-      <p className="mx-auto mt-1 max-w-xs text-xs text-ink-soft">
-        Share your shop link to get your first sale. Every order will show up
-        here in real time.
+    <div className="rounded-2xl border border-dashed border-border bg-white p-10 text-center">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-surface text-ink-soft">
+        <Package className="h-7 w-7" aria-hidden />
+      </div>
+      <p className="mt-4 text-base font-semibold text-ink">No orders yet</p>
+      <p className="mx-auto mt-2 max-w-sm text-sm text-ink-soft">
+        When a buyer pays, the order will appear here. Share your listing
+        links and you're in business.
       </p>
+      <Link
+        to="/app/listings"
+        className="mt-5 inline-flex h-11 items-center rounded-lg border border-border bg-white px-4 text-sm font-medium text-ink hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+      >
+        View my listings
+      </Link>
     </div>
   );
 }
 
 function FilteredEmpty({
-  filter,
   query,
+  onClear,
 }: {
-  filter: FilterKey;
   query: string;
+  onClear: () => void;
 }) {
   return (
-    <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center">
-      <p className="text-sm font-medium text-ink">No orders match</p>
-      <p className="mx-auto mt-1 max-w-xs text-xs text-ink-soft">
-        {query
-          ? `Nothing matches "${query}". Try clearing the search.`
-          : filter === "all"
-            ? "You have no orders in any filter."
-            : "Try a different filter or check back later."}
+    <div className="rounded-2xl border border-dashed border-border bg-white p-8 text-center">
+      <p className="text-sm font-medium text-ink">
+        {query ? `No orders match "${query}".` : "No orders match this filter."}
       </p>
+      <button
+        type="button"
+        onClick={onClear}
+        className="mt-3 text-sm font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+      >
+        Clear filters
+      </button>
     </div>
   );
 }

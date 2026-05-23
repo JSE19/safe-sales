@@ -1,74 +1,94 @@
 /**
- * Seller Order Detail — `/app/orders/:token`
+ * Seller Order Detail — `/app/orders/:token`.
  *
  * Mirrors the buyer-side page (`/order/:token`) but from the seller's
- * angle. Data shape and wiring pattern are deliberately the same:
+ * angle. Data + wiring pattern preserved verbatim from the previous
+ * version:
  *
  *   - `apiClient.getOrder(token)` → polled every 8s while non-terminal
  *   - `apiClient.shipOrder(token, { trackingNumber, carrier })` →
- *     mutation behind the "Mark as shipped" dialog
+ *     `shipMutation` behind the inline "Mark as shipped" form
  *
- * The page renders straight off `ApiOrder` + `ApiListing` + `ApiSeller`.
- * The earlier version of this file ran off `src/lib/mock.ts` fixtures
- * and surfaced dispute-resolution + return-flow + review cards built
- * for the demo screenshots. Those will come back when the real
- * dispute/review APIs are wired (kinds 33889 + 1985 from NIP.md);
- * removing them here keeps this commit honest about what's real.
+ * Design ported from `.stitch-designs/04-seller-orders.html` — same
+ * recipe used on screens #2 and #3:
+ *
+ *   - Adopted Stitch's two-column-on-desktop / single-column-on-mobile
+ *     layout (left = hero + summary, right = ship-to + timeline).
+ *   - Replaced the Mark-Shipped dialog with an inline form embedded
+ *     directly in the hero card when `status === "payment_locked"`.
+ *     This is the seller's one job; removing the click-into-dialog
+ *     step matches the prompt's "make it impossible to miss" goal.
+ *   - Re-spec'd the hero card to be status-aware: every status surfaces
+ *     a different headline + sub + (optional) form / data block, so
+ *     this page tells the truth no matter where the order is in the
+ *     escrow lifecycle.
+ *   - Added a mobile sticky action bar that ONLY appears when
+ *     `payment_locked` — scrolls to the inline ship form on tap.
+ *
+ * What was stripped from Stitch's output: Material Symbols, violet
+ * primary, custom sidebar + mobile bottom-nav (AppShell already
+ * provides those), invented fields (BTC conversion, member-since,
+ * shipping fee, SafeSale Fee, condition/category), and the
+ * "Contact Buyer" + "Raise Dispute" header buttons the prompt
+ * explicitly forbade (sellers can't unilaterally open disputes; the
+ * buyer phone is the only contact surface in MVP).
+ *
+ * The activity timeline is rendered inline (4 steps: placed → paid →
+ * shipped → released) rather than via the shared `Timeline` primitive
+ * — gives finer per-step control over the "alert" variant when
+ * disputed and the colour tiers requested by the prompt.
  *
  * URL parameter is `:token` (not `:id` or `:shortId`) because that's
- * the only identifier the backend accepts on the order endpoints. The
- * OrdersPage link was updated in the same commit.
+ * the only identifier the backend accepts on the order endpoints.
  */
 
 import { useSeoMeta } from "@unhead/react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppShell } from "@/components/safesale/AppShell";
-import { Avatar } from "@/components/safesale/Avatar";
-import { EscrowShield } from "@/components/safesale/EscrowShield";
 import { EscrowStatusPill } from "@/components/safesale/EscrowStatus";
-import { Timeline, type TimelineStep } from "@/components/safesale/Timeline";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertTriangle,
   ArrowLeft,
-  ChevronRight,
+  CheckCircle2,
+  Clock,
   Copy,
   Loader2,
-  PackageCheck,
-  Phone,
+  Mail,
+  Package,
+  RotateCcw,
+  Send,
   Truck,
 } from "lucide-react";
+
 import { useToast } from "@/hooks/useToast";
 import {
   apiClient,
   ApiError,
+  type ApiDispute,
   type ApiListingImage,
   type ApiOrder,
   type ApiOrderStatus,
   type GetOrderResponse,
 } from "@/lib/api";
-import { formatDate, formatNGN, formatRelative, formatTime } from "@/lib/format";
-import { sanitizeUrl } from "@/lib/utils";
+import {
+  formatDate,
+  formatNGN,
+  formatRelative,
+  formatTime,
+} from "@/lib/format";
+import { cn, sanitizeUrl } from "@/lib/utils";
 
 /** Backend order statuses that won't change — stop polling here. */
 const TERMINAL_STATUSES: ApiOrderStatus[] = ["completed", "refunded"];
 
-const CARRIERS = ["GIG Logistics", "DHL", "Other"] as const;
-type Carrier = (typeof CARRIERS)[number];
+/* -------------------------------- page -------------------------------- */
 
 export default function OrderDetailPage() {
   useSeoMeta({ title: "Order detail — SafeSale" });
@@ -95,30 +115,28 @@ export default function OrderDetailPage() {
     },
   });
 
-  /* ----------------------------- ui state ---------------------------- */
+  /* ----------------------------- ship form ---------------------------- */
 
-  const [shipOpen, setShipOpen] = useState(false);
   const [tracking, setTracking] = useState("");
-  const [carrier, setCarrier] = useState<Carrier>("GIG Logistics");
-
-  /* ----------------------------- mutations --------------------------- */
+  const [carrier, setCarrier] = useState("");
+  const trackingRef = useRef<HTMLInputElement>(null);
 
   const shipMutation = useMutation({
     mutationFn: () =>
       apiClient.shipOrder(token, {
         trackingNumber: tracking.trim() || undefined,
-        carrier,
+        carrier: carrier.trim() || undefined,
       }),
     onSuccess: (res) => {
       qc.setQueryData<GetOrderResponse>(
         ["safesale", "order", token],
         (prev) => (prev ? { ...prev, order: res.order } : prev),
       );
-      // Refresh the dashboard order feed so the "Needs your attention"
-      // list drops this row immediately.
+      // Refresh the dashboard order feed so the dashboard's
+      // "Needs your attention" strip drops this row immediately.
       qc.invalidateQueries({ queryKey: ["safesale", "seller-orders"] });
-      setShipOpen(false);
       setTracking("");
+      setCarrier("");
       toast({
         title: "Marked as shipped",
         description: "Buyer was notified.",
@@ -154,393 +172,905 @@ export default function OrderDetailPage() {
       query.error.code === "ORDER_NOT_FOUND";
     return (
       <AppShell title="Order not found">
-        <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center">
-          <p className="text-sm font-medium text-ink">
+        <div className="rounded-2xl border border-dashed border-border bg-white p-10 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-surface text-ink-soft">
+            <AlertTriangle className="h-6 w-6" aria-hidden />
+          </div>
+          <p className="mt-4 text-base font-semibold text-ink">
             {notFound
-              ? "We couldn't find that order."
-              : "Something went wrong loading this order."}
+              ? "We couldn't find that order"
+              : "Couldn't load this order"}
           </p>
-          <Button asChild variant="outline" className="mt-4">
-            <Link to="/app/orders">Back to orders</Link>
-          </Button>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-ink-soft">
+            {notFound
+              ? "The link may be wrong or the order may have been removed."
+              : "Check your connection and try again."}
+          </p>
+          <div className="mt-5 flex justify-center gap-2">
+            {!notFound && (
+              <Button
+                onClick={() => query.refetch()}
+                className="bg-brand text-brand-foreground hover:bg-brand/90"
+              >
+                Try again
+              </Button>
+            )}
+            <Button asChild variant="outline">
+              <Link to="/app/orders">Back to orders</Link>
+            </Button>
+          </div>
         </div>
       </AppShell>
     );
   }
 
   const { order, listing } = query.data;
+  const dispute: ApiDispute | null =
+    "dispute" in query.data && query.data.dispute
+      ? (query.data.dispute as ApiDispute)
+      : null;
+  const isPaymentLocked = order.status === "payment_locked";
+  const shipDisabled =
+    !tracking.trim() || !carrier.trim() || shipMutation.isPending;
 
   return (
     <AppShell
       title={`Order ${order.shortId}`}
       subtitle={`Placed ${formatRelative(order.createdAt)}`}
     >
-      <div className="space-y-5">
+      <div className={cn("space-y-6", isPaymentLocked && "pb-24 sm:pb-0")}>
+        {/* Back link */}
         <button
+          type="button"
           onClick={() => navigate(-1)}
-          className="inline-flex items-center gap-1 text-xs font-medium text-ink-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+          className="inline-flex items-center gap-1 rounded text-xs font-medium text-ink-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
         >
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to orders
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to orders
         </button>
 
-        {/* Hero card — product + amount + status */}
-        <div className="overflow-hidden rounded-2xl border border-border bg-white p-5 shadow-[0_8px_24px_-16px_rgba(15,42,30,0.12)]">
-          <div className="flex items-start gap-4">
-            <ListingThumb image={listing.images[0]} alt={listing.title} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-base font-semibold text-ink">
-                {listing.title}
-              </p>
-              <p className="mt-0.5 text-xs text-ink-soft">
-                {order.variant ?? ""}
-              </p>
-              <div className="mt-3 flex items-baseline gap-2">
-                <p className="text-2xl font-semibold tracking-tight text-ink">
-                  {formatNGN(order.amountNGN)}
-                </p>
-                <span className="text-[11px] text-ink-soft">
-                  ≈ {order.amountSats.toLocaleString()} sats
-                </span>
-              </div>
-              <EscrowStatusPill status={order.status} className="mt-3" />
-            </div>
+        {/* Heading row */}
+        <header className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="font-mono text-2xl font-semibold tabular-nums text-ink">
+              {order.shortId}
+            </h1>
+            <p className="mt-1 text-sm text-ink-soft">
+              Placed · {formatRelative(order.createdAt)} · by{" "}
+              <span className="text-ink">{order.buyerName}</span>
+            </p>
+          </div>
+          <EscrowStatusPill status={order.status} />
+        </header>
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          {/* LEFT — hero + summary */}
+          <div className="space-y-6 lg:col-span-2">
+            {/* Status-aware hero */}
+            <HeroCard
+              order={order}
+              dispute={dispute}
+              tracking={tracking}
+              carrier={carrier}
+              onTrackingChange={setTracking}
+              onCarrierChange={setCarrier}
+              trackingRef={trackingRef}
+              shipDisabled={shipDisabled}
+              isShipping={shipMutation.isPending}
+              shipError={
+                shipMutation.error instanceof Error
+                  ? shipMutation.error.message
+                  : null
+              }
+              onShip={() => shipMutation.mutate()}
+            />
+
+            {/* Order summary */}
+            <SummaryCard
+              listing={listing}
+              order={order}
+            />
+          </div>
+
+          {/* RIGHT — ship-to + timeline */}
+          <div className="space-y-6">
+            <ShipToCard order={order} />
+            <TimelineCard order={order} dispute={dispute} />
           </div>
         </div>
-
-        {listing.description && (
-          <section className="rounded-2xl border border-border bg-white p-5">
-            <h2 className="text-sm font-semibold text-ink">
-              Product description
-            </h2>
-            <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-ink-soft">
-              {listing.description}
-            </p>
-          </section>
-        )}
-
-        {/* Escrow shield — payment locked but not shipped */}
-        {order.status === "payment_locked" && (
-          <EscrowShield
-            amount={formatNGN(order.amountNGN)}
-            caption="Funds are secured. Ship the order to release payment after delivery."
-          />
-        )}
-
-        {/* Primary action — ship */}
-        {order.status === "payment_locked" && (
-          <Button
-            onClick={() => setShipOpen(true)}
-            size="lg"
-            className="h-12 w-full rounded-lg bg-brand text-base font-semibold text-brand-foreground hover:bg-brand/90"
-          >
-            <Truck className="mr-2 h-4 w-4" /> Mark as shipped
-          </Button>
-        )}
-
-        {/* In-transit confirmation */}
-        {order.status === "shipped" && (
-          <div className="rounded-2xl border border-sky-200/70 bg-sky-50/60 p-4">
-            <div className="flex items-start gap-3">
-              <Truck className="mt-0.5 h-5 w-5 shrink-0 text-sky-700" />
-              <div>
-                <p className="text-sm font-medium text-sky-900">In transit</p>
-                <p className="mt-0.5 text-xs text-sky-800/80">
-                  {[
-                    order.carrier ?? "Carrier not specified",
-                    order.trackingNumber ?? "No tracking number",
-                    order.shippedAt
-                      ? `shipped ${formatRelative(order.shippedAt)}`
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {order.status === "delivered" && (
-          <div className="rounded-2xl border border-indigo-200/70 bg-indigo-50/60 p-4">
-            <p className="text-sm font-medium text-indigo-900">
-              Delivered — waiting for buyer confirmation
-            </p>
-            {order.autoReleaseAt && (
-              <p className="mt-1 text-xs text-indigo-800/80">
-                Auto-releases on {formatDate(order.autoReleaseAt)}.
-              </p>
-            )}
-          </div>
-        )}
-
-        {order.status === "disputed" && (
-          <Link
-            to="/app/dispute"
-            className="flex items-center justify-between rounded-2xl border border-rose-200/70 bg-rose-50/60 p-4 hover:bg-rose-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-          >
-            <div className="flex items-start gap-3">
-              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
-              <div>
-                <p className="text-sm font-medium text-rose-900">
-                  Dispute open
-                </p>
-                <p className="mt-0.5 text-xs text-rose-800/80">
-                  {order.notes ?? "Buyer has opened a dispute on this order."}
-                </p>
-              </div>
-            </div>
-            <ChevronRight className="h-4 w-4 text-rose-700" />
-          </Link>
-        )}
-
-        {order.status === "completed" && (
-          <div className="rounded-2xl border border-emerald-200/70 bg-emerald-50/60 p-4">
-            <p className="text-sm font-medium text-emerald-900">
-              Payment released
-            </p>
-            {order.releasedAt && (
-              <p className="mt-1 text-xs text-emerald-800/80">
-                Released {formatRelative(order.releasedAt)} · sats settled.
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Buyer + timeline */}
-        <div className="grid gap-5 lg:grid-cols-3">
-          <Section title="Buyer" className="lg:col-span-1">
-            <div className="flex items-center gap-3">
-              <Avatar
-                seed={order.buyerName}
-                name={order.buyerName}
-                size={42}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold text-ink">
-                  {order.buyerName}
-                </p>
-                <p className="truncate text-xs text-ink-soft">
-                  {order.buyerCity}
-                </p>
-              </div>
-            </div>
-            <div className="mt-3 space-y-2 text-xs">
-              <CopyRow
-                icon={Phone}
-                label={order.buyerPhone}
-                onCopy={() =>
-                  navigator.clipboard
-                    ?.writeText(order.buyerPhone)
-                    .then(() => toast({ title: "Phone copied" }))
-                }
-              />
-            </div>
-          </Section>
-
-          <Section title="Timeline" className="lg:col-span-2">
-            <Timeline steps={timelineFor(order)} />
-          </Section>
-        </div>
-
-        <Section title="Payment details">
-          <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
-            <Row k="Item price" v={formatNGN(order.amountNGN)} />
-            <Row k="Order ID" v={order.shortId} />
-            {order.autoReleaseAt && (
-              <Row
-                k="Auto-release on"
-                v={formatDate(order.autoReleaseAt)}
-              />
-            )}
-            <Row k="Placed" v={formatDate(order.createdAt)} />
-            {order.shippedAt && (
-              <Row k="Shipped" v={formatDate(order.shippedAt)} />
-            )}
-            {order.releasedAt && (
-              <Row k="Released" v={formatDate(order.releasedAt)} />
-            )}
-          </dl>
-        </Section>
       </div>
 
-      {/* Ship dialog — wires to POST /api/orders/:token/ship */}
-      <Dialog open={shipOpen} onOpenChange={setShipOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Mark order as shipped</DialogTitle>
-            <DialogDescription>
-              Add a tracking number so the buyer knows it's on the way. Both
-              fields are optional — confirm shipping even if you don't have a
-              tracking number yet.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div>
-              <Label>Carrier</Label>
-              <div className="mt-1.5 grid grid-cols-3 gap-2">
-                {CARRIERS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setCarrier(c)}
-                    className={
-                      "rounded-md border px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand " +
-                      (carrier === c
-                        ? "border-brand bg-brand-soft text-brand-soft-foreground"
-                        : "border-border bg-white text-ink-soft hover:text-ink")
-                    }
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <Label htmlFor="tracking">Tracking number</Label>
-              <Input
-                id="tracking"
-                value={tracking}
-                onChange={(e) => setTracking(e.target.value)}
-                placeholder="GIG-12345"
-                className="mt-1.5 h-11"
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShipOpen(false)}
-              disabled={shipMutation.isPending}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => shipMutation.mutate()}
-              disabled={shipMutation.isPending}
-              className="bg-brand text-brand-foreground hover:bg-brand/90"
-            >
-              {shipMutation.isPending ? (
-                <>
-                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                  Confirming…
-                </>
-              ) : (
-                <>
-                  <Truck className="mr-1 h-4 w-4" /> Confirm shipped
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Mobile sticky action bar — only when payment_locked */}
+      {isPaymentLocked && (
+        <div
+          className="fixed bottom-0 left-0 right-0 z-30 flex items-center gap-3 border-t border-border bg-white px-4 py-3 shadow-[0_-1px_3px_rgba(0,0,0,0.04)] sm:hidden"
+          role="region"
+          aria-label="Quick ship action"
+        >
+          <p className="flex-1 text-xs leading-tight text-ink-soft">
+            Ready to ship?
+          </p>
+          <Button
+            type="button"
+            onClick={() => {
+              trackingRef.current?.scrollIntoView({
+                behavior: "smooth",
+                block: "center",
+              });
+              trackingRef.current?.focus();
+            }}
+            className="h-11 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground hover:bg-brand/90"
+          >
+            <Send className="mr-1 h-4 w-4" /> Mark shipped
+          </Button>
+        </div>
+      )}
     </AppShell>
   );
 }
 
-/* -------------------------- small subcomponents ------------------------ */
+/* ------------------------------ hero card ------------------------------ */
 
-function Section({
-  title,
-  className,
-  children,
+interface HeroProps {
+  order: ApiOrder;
+  dispute: ApiDispute | null;
+  tracking: string;
+  carrier: string;
+  onTrackingChange: (v: string) => void;
+  onCarrierChange: (v: string) => void;
+  trackingRef: React.RefObject<HTMLInputElement | null>;
+  shipDisabled: boolean;
+  isShipping: boolean;
+  shipError: string | null;
+  onShip: () => void;
+}
+
+function HeroCard({
+  order,
+  dispute,
+  tracking,
+  carrier,
+  onTrackingChange,
+  onCarrierChange,
+  trackingRef,
+  shipDisabled,
+  isShipping,
+  shipError,
+  onShip,
+}: HeroProps) {
+  switch (order.status) {
+    case "payment_locked":
+      return (
+        <Card>
+          <AccentStrip
+            tone="amber"
+            icon={<Package className="h-3.5 w-3.5" aria-hidden />}
+          >
+            <span className="font-semibold">Action required</span> — buyer
+            has paid; ship this item to release your money.
+          </AccentStrip>
+          <h2 className="mt-5 text-base font-semibold text-ink">
+            Ship this order
+          </h2>
+          <p className="mt-1 text-sm text-ink-soft">
+            Once you mark this shipped, the buyer gets notified. They have 7
+            days to confirm — after that the payment auto-releases to you.
+          </p>
+          <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="tracking">Tracking number</Label>
+              <Input
+                id="tracking"
+                ref={trackingRef}
+                value={tracking}
+                onChange={(e) => onTrackingChange(e.target.value)}
+                placeholder="e.g. GIG12345"
+                className="mt-1.5 h-11 font-mono tabular-nums"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <Label htmlFor="carrier">Carrier</Label>
+              <Input
+                id="carrier"
+                value={carrier}
+                onChange={(e) => onCarrierChange(e.target.value)}
+                placeholder="GIG, Kwik, DHL, Sendbox…"
+                className="mt-1.5 h-11"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          {shipError && (
+            <p className="mt-3 text-xs text-rose-700">{shipError}</p>
+          )}
+          <Button
+            type="button"
+            onClick={onShip}
+            disabled={shipDisabled}
+            className="mt-4 h-11 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground hover:bg-brand/90 disabled:opacity-50"
+          >
+            {isShipping ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Marking
+                shipped…
+              </>
+            ) : (
+              <>
+                <Send className="mr-2 h-4 w-4" /> Mark as shipped
+              </>
+            )}
+          </Button>
+        </Card>
+      );
+
+    case "shipped":
+      return (
+        <Card>
+          <div className="flex items-start gap-3">
+            <IconCircle tone="sky">
+              <Truck className="h-5 w-5" aria-hidden />
+            </IconCircle>
+            <div className="flex-1">
+              <h2 className="text-base font-semibold text-ink">
+                Item is on the way
+              </h2>
+              <p className="mt-1 text-sm text-ink-soft">
+                You've shipped this order. The buyer has until{" "}
+                <span className="font-medium text-ink">
+                  {order.autoReleaseAt
+                    ? formatRelative(order.autoReleaseAt)
+                    : "release"}
+                </span>{" "}
+                to release the payment, or it'll release automatically.
+              </p>
+            </div>
+          </div>
+          <ShipmentData order={order} />
+        </Card>
+      );
+
+    case "delivered":
+      return (
+        <Card>
+          <div className="flex items-start gap-3">
+            <IconCircle tone="sky">
+              <Truck className="h-5 w-5" aria-hidden />
+            </IconCircle>
+            <div className="flex-1">
+              <h2 className="text-base font-semibold text-ink">
+                Buyer marked delivered
+              </h2>
+              <p className="mt-1 text-sm text-ink-soft">
+                The buyer marked this as delivered. Payment auto-releases
+                {order.autoReleaseAt
+                  ? ` on ${formatDate(order.autoReleaseAt)}`
+                  : " soon"}
+                .
+              </p>
+            </div>
+          </div>
+          <ShipmentData order={order} />
+        </Card>
+      );
+
+    case "completed":
+      return (
+        <Card>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold text-ink">
+                Payment released — you got paid
+              </h2>
+              <p className="mt-1 text-sm text-ink-soft">
+                The buyer released the escrow on{" "}
+                {order.releasedAt ? formatTime(order.releasedAt) : "—"}. The{" "}
+                {order.amountSats.toLocaleString()} sats are yours.
+              </p>
+            </div>
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-brand-soft px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-brand-soft-foreground">
+              <CheckCircle2 className="h-3 w-3" aria-hidden /> Completed
+            </span>
+          </div>
+        </Card>
+      );
+
+    case "disputed":
+      return (
+        <Card>
+          <div className="flex items-start gap-3">
+            <IconCircle tone="rose">
+              <AlertTriangle className="h-5 w-5" aria-hidden />
+            </IconCircle>
+            <div className="flex-1">
+              <h2 className="text-base font-semibold text-rose-800">
+                This order is in dispute
+              </h2>
+              <p className="mt-1 text-sm text-ink-soft">
+                A mediator is reviewing. You'll be notified when there's a
+                decision.
+              </p>
+            </div>
+          </div>
+          {dispute && (
+            <div className="mt-4 space-y-2 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-rose-800">
+                Dispute reason
+              </p>
+              <p className="text-rose-900">{dispute.reason}</p>
+              {dispute.summary && (
+                <p className="text-xs text-rose-800">{dispute.summary}</p>
+              )}
+              <p className="text-[11px] text-rose-700">
+                Opened by {dispute.openedBy} ·{" "}
+                {formatRelative(dispute.createdAt)} · priority:{" "}
+                {dispute.priority}
+              </p>
+            </div>
+          )}
+        </Card>
+      );
+
+    case "pending_payment":
+      return (
+        <Card>
+          <div className="flex items-start gap-3">
+            <IconCircle tone="neutral">
+              <Clock className="h-5 w-5" aria-hidden />
+            </IconCircle>
+            <div className="flex-1">
+              <h2 className="text-base font-semibold text-ink">
+                Awaiting buyer payment
+              </h2>
+              <p className="mt-1 text-sm text-ink-soft">
+                The buyer's virtual account is issued. They have until{" "}
+                <span className="font-medium text-ink">
+                  {order.expiresAt
+                    ? formatTime(order.expiresAt)
+                    : "the deadline"}
+                </span>{" "}
+                to send the transfer. We'll notify you the moment it lands.
+              </p>
+            </div>
+          </div>
+        </Card>
+      );
+
+    case "refunded":
+      return (
+        <Card>
+          <div className="flex items-start gap-3">
+            <IconCircle tone="rose">
+              <RotateCcw className="h-5 w-5" aria-hidden />
+            </IconCircle>
+            <div className="flex-1">
+              <h2 className="text-base font-semibold text-ink">
+                Order was refunded
+              </h2>
+              <p className="mt-1 text-sm text-ink-soft">
+                Resolved on{" "}
+                {order.refundedAt ? formatTime(order.refundedAt) : "—"}. The
+                buyer got their money back.
+              </p>
+            </div>
+          </div>
+        </Card>
+      );
+
+    default:
+      return null;
+  }
+}
+
+/** Shared shipment-data block for shipped / delivered hero variants. */
+function ShipmentData({ order }: { order: ApiOrder }) {
+  const { toast } = useToast();
+  return (
+    <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4 text-sm">
+      <DataPair label="Tracking number">
+        <span className="font-mono text-ink tabular-nums">
+          {order.trackingNumber ?? "—"}
+        </span>
+        {order.trackingNumber && (
+          <CopyButton
+            value={order.trackingNumber}
+            onCopied={() => toast({ title: "Tracking number copied" })}
+          />
+        )}
+      </DataPair>
+      <DataPair label="Carrier">
+        <span className="text-ink">{order.carrier ?? "—"}</span>
+      </DataPair>
+      {order.shippedAt && (
+        <DataPair label="Shipped">
+          <span className="text-ink-soft">
+            {formatRelative(order.shippedAt)}
+          </span>
+        </DataPair>
+      )}
+    </dl>
+  );
+}
+
+/* ----------------------------- ship-to card ----------------------------- */
+
+function ShipToCard({ order }: { order: ApiOrder }) {
+  const { toast } = useToast();
+  return (
+    <Card>
+      <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+        Ship to
+      </p>
+      <dl className="mt-4 grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-1">
+        <Field label="Buyer name">
+          <p className="text-sm text-ink">{order.buyerName}</p>
+        </Field>
+        <Field label="Phone">
+          <div className="flex items-center justify-between gap-2">
+            <a
+              href={`tel:${order.buyerPhone}`}
+              className="text-sm text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+            >
+              {order.buyerPhone}
+            </a>
+            <CopyButton
+              value={order.buyerPhone}
+              onCopied={() => toast({ title: "Phone copied" })}
+            />
+          </div>
+        </Field>
+        <Field label="City">
+          <p className="text-sm text-ink">{order.buyerCity}</p>
+        </Field>
+        <Field label="Delivery address">
+          {order.buyerAddress ? (
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-sm text-ink">{order.buyerAddress}</p>
+              <CopyButton
+                value={order.buyerAddress}
+                onCopied={() => toast({ title: "Address copied" })}
+              />
+            </div>
+          ) : (
+            <p className="text-sm italic text-ink-soft">
+              Buyer didn't provide an address — contact them via phone above.
+            </p>
+          )}
+        </Field>
+        <Field label="Contact preference">
+          <span className="inline-block rounded-md border border-border bg-surface px-2 py-0.5 text-xs text-ink-soft">
+            {order.contactMethod === "phone"
+              ? "Phone"
+              : order.contactMethod === "email"
+                ? "Email"
+                : "Either"}
+          </span>
+        </Field>
+        {order.buyerEmail && (
+          <Field label="Email">
+            <div className="flex items-center justify-between gap-2">
+              <a
+                href={`mailto:${order.buyerEmail}`}
+                className="flex items-center gap-1.5 text-sm text-ink hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+              >
+                <Mail className="h-3.5 w-3.5 text-ink-soft" aria-hidden />
+                {order.buyerEmail}
+              </a>
+              <CopyButton
+                value={order.buyerEmail}
+                onCopied={() => toast({ title: "Email copied" })}
+              />
+            </div>
+          </Field>
+        )}
+        {order.variant && (
+          <Field label="Variant">
+            <p className="text-sm text-ink">{order.variant}</p>
+          </Field>
+        )}
+      </dl>
+    </Card>
+  );
+}
+
+/* ----------------------------- summary card ----------------------------- */
+
+function SummaryCard({
+  listing,
+  order,
 }: {
-  title: string;
-  className?: string;
-  children: React.ReactNode;
+  listing: GetOrderResponse["listing"];
+  order: ApiOrder;
 }) {
   return (
-    <section
-      className={
-        "rounded-2xl border border-border bg-white p-5 shadow-[0_8px_24px_-16px_rgba(15,42,30,0.12)] " +
-        (className ?? "")
-      }
+    <Card>
+      <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+        Order summary
+      </p>
+
+      <div className="mt-4 flex items-center gap-3">
+        <ListingThumb image={listing.images[0]} alt={listing.title} size={56} />
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-ink">
+            {listing.title}
+          </p>
+          <p className="mt-0.5 truncate font-mono text-[11px] tabular-nums text-ink-soft">
+            {listing.id}
+          </p>
+        </div>
+      </div>
+
+      <dl className="mt-4 space-y-0 text-sm">
+        <SummaryRow label="Unit price">
+          <span className="tabular-nums text-ink">
+            {formatNGN(listing.priceNGN)}
+          </span>
+        </SummaryRow>
+        {order.variant && (
+          <SummaryRow label="Variant">
+            <span className="text-ink">{order.variant}</span>
+          </SummaryRow>
+        )}
+        <SummaryRow label="Subtotal (NGN)">
+          <span className="font-semibold tabular-nums text-ink">
+            {formatNGN(order.amountNGN)}
+          </span>
+        </SummaryRow>
+        <SummaryRow label="Subtotal (sats)">
+          <span className="font-mono tabular-nums text-ink-soft">
+            {order.amountSats.toLocaleString()} sats
+          </span>
+        </SummaryRow>
+      </dl>
+
+      <p className="mt-4 text-[11px] italic text-ink-soft">
+        Buyer paid in Naira via Bitnob; escrow held as Cashu sats locked to
+        their one-time key.
+      </p>
+    </Card>
+  );
+}
+
+/* ---------------------------- timeline card ---------------------------- */
+
+interface TimelineStepSpec {
+  key: string;
+  title: string;
+  at?: string;
+  detail?: string;
+  state: "past" | "current" | "future" | "alert";
+}
+
+function TimelineCard({
+  order,
+  dispute,
+}: {
+  order: ApiOrder;
+  dispute: ApiDispute | null;
+}) {
+  const steps = buildTimelineSteps(order, dispute);
+  return (
+    <Card>
+      <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+        Activity
+      </p>
+      <ol className="mt-4 space-y-0">
+        {steps.map((step, i) => (
+          <TimelineRow
+            key={step.key}
+            step={step}
+            isLast={i === steps.length - 1}
+          />
+        ))}
+      </ol>
+    </Card>
+  );
+}
+
+function TimelineRow({
+  step,
+  isLast,
+}: {
+  step: TimelineStepSpec;
+  isLast: boolean;
+}) {
+  const tone =
+    step.state === "past"
+      ? "bg-brand-soft text-brand-soft-foreground"
+      : step.state === "current"
+        ? "bg-amber-100 text-amber-800"
+        : step.state === "alert"
+          ? "bg-rose-100 text-rose-800"
+          : "border border-border bg-surface text-ink-soft opacity-60";
+
+  let Icon = CheckCircle2;
+  if (step.key === "shipped") Icon = Truck;
+  else if (step.key === "released") Icon = CheckCircle2;
+  else if (step.key === "paid") Icon = Package;
+  if (step.state === "alert")
+    Icon = step.key === "released" ? AlertTriangle : RotateCcw;
+  if (step.state === "future" && step.key === "shipped") Icon = Truck;
+
+  return (
+    <li
+      className={cn(
+        "flex items-start gap-3 py-3",
+        !isLast && "border-b border-border",
+      )}
     >
-      <h2 className="text-sm font-semibold text-ink">{title}</h2>
-      <div className="mt-3">{children}</div>
+      <div
+        className={cn(
+          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full",
+          tone,
+        )}
+        aria-hidden
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-ink">{step.title}</p>
+        <p className="mt-0.5 text-xs text-ink-soft">{step.at ?? "—"}</p>
+        {step.detail && (
+          <p className="mt-1 font-mono text-[11px] tabular-nums text-ink-soft">
+            {step.detail}
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function buildTimelineSteps(
+  o: ApiOrder,
+  dispute: ApiDispute | null,
+): TimelineStepSpec[] {
+  const past = (s: ApiOrderStatus[]) => s.includes(o.status);
+
+  const steps: TimelineStepSpec[] = [
+    {
+      key: "placed",
+      title: "Order placed",
+      at: formatTime(o.createdAt),
+      state: "past",
+    },
+    {
+      key: "paid",
+      title: past([
+        "payment_locked",
+        "shipped",
+        "delivered",
+        "completed",
+        "disputed",
+        "refunded",
+      ])
+        ? "Payment received"
+        : "Awaiting payment",
+      at: past([
+        "payment_locked",
+        "shipped",
+        "delivered",
+        "completed",
+        "disputed",
+        "refunded",
+      ])
+        ? formatTime(o.updatedAt)
+        : undefined,
+      state: past([
+        "payment_locked",
+        "shipped",
+        "delivered",
+        "completed",
+        "disputed",
+        "refunded",
+      ])
+        ? "past"
+        : o.status === "pending_payment"
+          ? "current"
+          : "future",
+    },
+    {
+      key: "shipped",
+      title: o.shippedAt ? "Shipped" : "Awaiting shipment",
+      at: o.shippedAt ? formatTime(o.shippedAt) : undefined,
+      detail:
+        o.shippedAt && o.trackingNumber
+          ? `${o.carrier ?? "Carrier"} · ${o.trackingNumber}`
+          : undefined,
+      state: o.shippedAt
+        ? "past"
+        : o.status === "payment_locked"
+          ? "current"
+          : "future",
+    },
+    {
+      key: "released",
+      title:
+        o.status === "refunded"
+          ? "Refunded to buyer"
+          : o.status === "disputed"
+            ? `Dispute opened${dispute ? ` — ${dispute.reason}` : ""}`
+            : o.status === "completed"
+              ? "Payment released"
+              : "Awaiting buyer release",
+      at:
+        o.status === "completed" && o.releasedAt
+          ? formatTime(o.releasedAt)
+          : o.status === "refunded" && o.refundedAt
+            ? formatTime(o.refundedAt)
+            : o.status === "disputed" && dispute
+              ? formatTime(dispute.createdAt)
+              : undefined,
+      state:
+        o.status === "completed"
+          ? "past"
+          : o.status === "disputed" || o.status === "refunded"
+            ? "alert"
+            : o.status === "shipped" || o.status === "delivered"
+              ? "current"
+              : "future",
+    },
+  ];
+
+  return steps;
+}
+
+/* ---------------------------- small primitives ---------------------------- */
+
+function Card({ children }: { children: React.ReactNode }) {
+  return (
+    <section className="rounded-2xl border border-border bg-white p-5 sm:p-6">
+      {children}
     </section>
   );
 }
 
-function Row({ k, v }: { k: string; v: string }) {
+function AccentStrip({
+  tone,
+  icon,
+  children,
+}: {
+  tone: "amber";
+  icon: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  // single tone for now; keeps prop API ready for future variants
+  const cls =
+    tone === "amber"
+      ? "border-amber-200 bg-amber-50 text-amber-900"
+      : "border-border bg-surface text-ink";
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-border/50 pb-2 last:border-0 sm:border-0 sm:pb-0">
-      <dt className="text-xs text-ink-soft">{k}</dt>
-      <dd className="text-sm font-medium tabular-nums text-ink">{v}</dd>
+    <div
+      className={cn(
+        "-mx-5 -mt-5 flex items-center gap-2 rounded-t-2xl border-b px-5 py-2 text-xs font-medium sm:-mx-6 sm:-mt-6 sm:px-6",
+        cls,
+      )}
+    >
+      {icon}
+      <span>{children}</span>
     </div>
   );
 }
 
-function CopyRow({
-  icon: Icon,
-  label,
-  onCopy,
+function IconCircle({
+  tone,
+  children,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  tone: "sky" | "rose" | "neutral";
+  children: React.ReactNode;
+}) {
+  const cls =
+    tone === "sky"
+      ? "bg-sky-50 text-sky-800"
+      : tone === "rose"
+        ? "bg-rose-50 text-rose-800"
+        : "bg-surface text-ink-soft";
+  return (
+    <div
+      className={cn(
+        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
+        cls,
+      )}
+      aria-hidden
+    >
+      {children}
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
   label: string;
-  onCopy: () => void;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-surface/40 px-3 py-2">
-      <Icon className="h-3.5 w-3.5 text-ink-soft" />
-      <span className="flex-1 truncate text-ink">{label}</span>
-      <button
-        onClick={onCopy}
-        className="text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
-        aria-label="Copy"
-      >
-        <Copy className="h-3.5 w-3.5" />
-      </button>
+    <div>
+      <dt className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+        {label}
+      </dt>
+      <dd className="mt-1">{children}</dd>
     </div>
   );
 }
 
-function OrderSkeleton() {  return (
-    <div className="space-y-5">
-      <Skeleton className="h-3 w-24" />
-      <div className="rounded-2xl border border-border bg-white p-5">
-        <div className="flex gap-4">
-          <Skeleton className="h-20 w-20 rounded-xl" />
-          <div className="flex-1 space-y-2">
-            <Skeleton className="h-4 w-2/3" />
-            <Skeleton className="h-7 w-32" />
-            <Skeleton className="h-5 w-24" />
-          </div>
-        </div>
-      </div>
-      <div className="grid gap-5 lg:grid-cols-3">
-        <Skeleton className="h-32 rounded-2xl lg:col-span-1" />
-        <Skeleton className="h-32 rounded-2xl lg:col-span-2" />
-      </div>
+function DataPair({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <dt className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+        {label}
+      </dt>
+      <dd className="mt-1 flex items-center justify-between gap-2">
+        {children}
+      </dd>
     </div>
   );
 }
 
-/* ----------------------------- listing thumb -------------------------- */
+function SummaryRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 border-b border-border py-1.5 text-sm last:border-0">
+      <dt className="text-ink-soft">{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  );
+}
 
-/**
- * The shared `ProductImage` component only renders seed-based gradient
- * placeholders. Backend listings carry real Blossom URLs, so we
- * recreate the same small contract here: render the URL when present,
- * fall back to a deterministic gradient for seed-only fixtures.
- *
- * Cloned from `BuyerOrder.tsx::ListingThumb`. When/if these consolidate
- * into a single reusable component, drop both copies.
- */
+function CopyButton({
+  value,
+  onCopied,
+}: {
+  value: string;
+  onCopied: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        navigator.clipboard?.writeText(value).then(onCopied).catch(() => {
+          /* clipboard refused; silent — toast would be misleading */
+        });
+      }}
+      aria-label="Copy"
+      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-soft hover:bg-surface hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+    >
+      <Copy className="h-3.5 w-3.5" aria-hidden />
+    </button>
+  );
+}
+
+/* ------------------------------ thumbnails ------------------------------ */
+
 function ListingThumb({
   image,
   alt,
+  size,
 }: {
   image: ApiListingImage | undefined;
   alt: string;
+  size: number;
 }) {
   const url = image?.url ? sanitizeUrl(image.url) : undefined;
+  const dim = { width: size, height: size };
   if (url) {
     return (
       <img
         src={url}
         alt={alt}
         loading="lazy"
-        className="h-20 w-20 shrink-0 rounded-xl object-cover"
+        className="shrink-0 rounded-xl object-cover"
+        style={dim}
       />
     );
   }
@@ -548,99 +1078,70 @@ function ListingThumb({
   return (
     <div
       aria-hidden
-      className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl text-ink-soft"
+      className="flex shrink-0 items-center justify-center rounded-xl bg-surface text-ink-soft"
       style={{
-        background: `linear-gradient(135deg, hsl(${(hashCode(seed) % 360 + 360) % 360} 35% 88%), hsl(${(hashCode(seed) * 7 % 360 + 360) % 360} 30% 80%))`,
+        ...dim,
+        background: `linear-gradient(135deg, hsl(${((hash(seed) % 360) + 360) % 360} 35% 88%), hsl(${(((hash(seed) * 7) % 360) + 360) % 360} 30% 80%))`,
       }}
     >
-      <PackageCheck className="h-7 w-7 opacity-50" />
+      <Package className="h-5 w-5 opacity-60" />
     </div>
   );
 }
 
-function hashCode(s: string): number {
+function hash(s: string): number {
   let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  }
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
   return h;
 }
 
-/* ------------------------------- timeline ----------------------------- */
-function timelineFor(o: ApiOrder): TimelineStep[] {
-  type StepState = TimelineStep["state"];
-  const get = (
-    states: Partial<Record<ApiOrderStatus, StepState>>,
-    fallback: StepState,
-  ): StepState => states[o.status] ?? fallback;
+/* ------------------------------ skeleton ------------------------------ */
 
-  return [
-    {
-      key: "placed",
-      title: "Order placed",
-      at: formatTime(o.createdAt),
-      description: `${o.buyerName} from ${o.buyerCity}`,
-      state: "done",
-    },
-    {
-      key: "paid",
-      title: "Payment secured in escrow",
-      description:
-        o.status === "pending_payment"
-          ? "Awaiting bank transfer"
-          : formatNGN(o.amountNGN),
-      at:
-        o.status === "pending_payment" ? undefined : formatTime(o.updatedAt),
-      state: get({ pending_payment: "active" }, "done"),
-    },
-    {
-      key: "shipped",
-      title: "Shipped with tracking",
-      description: o.trackingNumber
-        ? `${o.carrier ?? "Carrier"} · ${o.trackingNumber}`
-        : "Add tracking when you ship",
-      at: o.shippedAt ? formatTime(o.shippedAt) : undefined,
-      state: get(
-        {
-          pending_payment: "pending",
-          payment_locked: "active",
-        },
-        "done",
-      ),
-    },
-    {
-      key: "delivered",
-      title: "Delivered",
-      // Backend doesn't expose a deliveredAt field separately yet; use
-      // shippedAt as a proxy hint that we're past the shipped step.
-      at: undefined,
-      state: get(
-        {
-          pending_payment: "pending",
-          payment_locked: "pending",
-          shipped: "active",
-        },
-        o.status === "disputed" ? "alert" : "done",
-      ),
-    },
-    {
-      key: "released",
-      title: o.status === "disputed" ? "Dispute under review" : "Payment released",
-      at: o.releasedAt ? formatTime(o.releasedAt) : undefined,
-      description:
-        o.status === "completed"
-          ? `${formatNGN(o.amountNGN)} settled in sats`
-          : o.status === "disputed"
-            ? "SafeSale mediator reviewing evidence"
-            : undefined,
-      state:
-        o.status === "completed"
-          ? "done"
-          : o.status === "disputed"
-            ? "alert"
-            : o.status === "delivered"
-              ? "active"
-              : "pending",
-    },
-  ];
+function OrderSkeleton() {
+  return (
+    <div className="space-y-6">
+      <Skeleton className="h-3 w-24" />
+      <div className="space-y-2">
+        <Skeleton className="h-7 w-32" />
+        <Skeleton className="h-4 w-48" />
+      </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
+          <div className="rounded-2xl border border-border bg-white p-6">
+            <Skeleton className="h-5 w-1/2" />
+            <div className="mt-3 space-y-2">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-4/5" />
+              <Skeleton className="h-4 w-3/5" />
+            </div>
+          </div>
+          <div className="rounded-2xl border border-border bg-white p-6">
+            <Skeleton className="h-4 w-32" />
+            <div className="mt-3 space-y-2">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+            </div>
+          </div>
+        </div>
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-border bg-white p-6">
+            <Skeleton className="h-4 w-24" />
+            <div className="mt-3 space-y-2">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-2/3" />
+            </div>
+          </div>
+          <div className="rounded-2xl border border-border bg-white p-6">
+            <Skeleton className="h-4 w-24" />
+            <div className="mt-3 space-y-2">
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-4/5" />
+              <Skeleton className="h-4 w-3/5" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
