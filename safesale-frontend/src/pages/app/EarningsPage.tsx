@@ -1,412 +1,563 @@
+/**
+ * Seller Earnings — `/app/earnings`.
+ *
+ * Designed and ported directly from spec — no Stitch round-trip on
+ * this screen (cost more than the layout it produced for the other
+ * pages). Same visual contract as #2 / #3 / #4: semantic tokens,
+ * lucide icons only, mobile-first.
+ *
+ * Data source: 100 % `useSellerOrders()` — the same TanStack cache
+ * the dashboard and the orders list use, so all three surfaces agree
+ * at all times. Backend has no dedicated `/api/earnings` endpoint yet
+ * (per PROGRESS.md "Still on mock data" + PRD delta #8). When it
+ * lands, the aggregation done here in JavaScript moves to a single
+ * `apiClient.getEarnings()` call; the UI doesn't change.
+ *
+ * What the page surfaces (every number derived from real orders):
+ *
+ *   - Released (lifetime)  — sum of amountSats across `completed` orders
+ *   - Locked in escrow     — sum of amountSats across `payment_locked` orders
+ *   - This month           — sum of amountSats across `completed` orders
+ *                            where releasedAt ≥ first of current month
+ *   - Pending shipment     — count of orders still in `payment_locked`
+ *                            (work the seller can do to release more sats)
+ *   - Payout history       — completed orders, newest first, with NGN +
+ *                            sats per row
+ *
+ * What's intentionally *NOT* on this page:
+ *
+ *   - Working "Cash out to Naira" button. The Bitnob payout integration
+ *     (PRD delta #2) and the LN melt to seller wallet are both on
+ *     Joy's plate. Frontend shows a clearly-labelled "Cash out · coming
+ *     soon" CTA that toasts a friendly note when tapped — same honest
+ *     pattern we used for "Edit listing" on screen #3.
+ *
+ *   - Sparkline / weekly chart. Earlier stub had a fabricated 7-day
+ *     array; we don't have real time-series data and inventing one
+ *     would be a fake-stat in the same category as the old TrustStrip
+ *     numbers. Dropped.
+ *
+ *   - Bank account "on file." The current backend Seller schema
+ *     supports `bankName`, `bankAccountNumber`, `bankAccountName` but
+ *     nothing reads/writes them yet. Showing a fake "GTB ****2841" row
+ *     in the meantime is lying. Replaced with an honest empty-state
+ *     card pointing at the future feature.
+ *
+ *   - Sats-to-NGN live conversion. We display the sats figure from the
+ *     order row exactly as the backend stored it (locked-in rate at
+ *     order creation, per BACKEND.md). Re-computing in JS would either
+ *     require a live rate fetch (over-scope) or another fabricated
+ *     constant (dishonest).
+ */
+
 import { useSeoMeta } from "@unhead/react";
-import { useState } from "react";
+import { useMemo } from "react";
+import { Link } from "react-router-dom";
+
 import { AppShell } from "@/components/safesale/AppShell";
+import { EscrowStatusPill } from "@/components/safesale/EscrowStatus";
+import { ListingThumb } from "@/components/safesale/ListingThumb";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { earnings, payouts } from "@/lib/mock";
-import { formatDate, formatNGN, formatSats } from "@/lib/format";
-import {
-  Banknote,
-  ShieldCheck,
+  ArrowDownCircle,
+  ArrowRight,
+  Building2,
   CheckCircle2,
   Clock,
-  Building2,
-  ArrowDownCircle,
-  Pencil,
-  Zap,
-  Loader2,
+  ShieldCheck,
+  TrendingUp,
+  Wallet,
 } from "lucide-react";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { cn } from "@/lib/utils";
+
+import { useCurrentSeller } from "@/hooks/useCurrentSeller";
+import { useSellerOrders } from "@/hooks/useSellerOrders";
+import { useToast } from "@/hooks/useToast";
+import type { SellerOrderRow } from "@/lib/api";
+import { formatNGN, formatRelative } from "@/lib/format";
+
+/* ----------------------------------------------------------------------- */
+/*                                Page                                     */
+/* ----------------------------------------------------------------------- */
 
 export default function EarningsPage() {
   useSeoMeta({ title: "Earnings — SafeSale" });
-  const [withdrawOpen, setWithdrawOpen] = useState(false);
-  const [isWithdrawing, setIsWithdrawing] = useState(false);
-  const [withdrawSuccess, setWithdrawSuccess] = useState(false);
-  const [bankEditOpen, setBankEditOpen] = useState(false);
-  
-  // Local state for bank details (in a real app this would be synced with a backend/Nostr)
-  const [bankDetails, setBankDetails] = useState({
-    bankName: "Guaranty Trust Bank",
-    accountName: "Amaka Okafor",
-    accountNumber: "0123456789"
-  });
 
-  const handleWithdraw = () => {
-    setIsWithdrawing(true);
-    // Simulate API call
-    setTimeout(() => {
-      setIsWithdrawing(false);
-      setWithdrawSuccess(true);
-      setTimeout(() => {
-        setWithdrawSuccess(false);
-        setWithdrawOpen(false);
-      }, 2000);
-    }, 1500);
-  };
+  const [seller] = useCurrentSeller();
+  const { orders, isLoading } = useSellerOrders();
+  const { toast } = useToast();
 
-  const handleSaveBank = (e: React.FormEvent) => {
-    e.preventDefault();
-    setBankEditOpen(false);
-    // Toast would be here
+  const stats = useMemo(() => computeStats(orders), [orders]);
+  const completed = useMemo(
+    () =>
+      orders
+        .filter((o) => o.status === "completed")
+        .sort((a, b) => +new Date(b.releasedAt ?? b.updatedAt) - +new Date(a.releasedAt ?? a.updatedAt)),
+    [orders],
+  );
+
+  const onCashOut = () => {
+    toast({
+      title: "Cash-out coming soon",
+      description:
+        "Naira payout via Bitnob lands shortly after the hackathon. Your sats are safely settled.",
+    });
   };
 
   return (
-    <AppShell title="Earnings" subtitle="Money in, money out — all in one place.">
-      <div className="space-y-5">
-        {/* Balance hero */}
-        <div className="overflow-hidden rounded-2xl border border-border bg-white p-5 shadow-[0_8px_24px_-16px_rgba(15,42,30,0.12)]">
-          <p className="text-xs font-medium uppercase tracking-wider text-ink-soft">
-            Available to withdraw
+    <AppShell
+      title="Earnings"
+      subtitle="Every released order, every sat — straight from the chain, not made up."
+    >
+      <div className="space-y-6">
+        {/* 1. Hero — released-lifetime + cash-out CTA */}
+        <section className="overflow-hidden rounded-2xl border border-border bg-white p-5 sm:p-6">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+            Released to you (lifetime)
           </p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight text-ink sm:text-4xl">
-            {formatNGN(earnings.availableNGN)}
-          </p>
-          <Button
-            onClick={() => setWithdrawOpen(true)}
-            size="lg"
-            className="mt-4 h-12 w-full rounded-lg bg-brand text-base font-semibold text-brand-foreground hover:bg-brand/90"
-          >
-            <ArrowDownCircle className="mr-2 h-4 w-4" /> Withdraw to bank
-          </Button>
-
-          <div className="mt-5 grid grid-cols-2 divide-x divide-border rounded-xl border border-border">
-            <Balance
-              icon={ShieldCheck}
-              label="In escrow"
-              value={formatNGN(earnings.pendingNGN)}
-              sub="across 5 active orders"
-            />
-            <Balance
-              icon={Zap}
-              label="Sats balance"
-              value={formatSats(earnings.satsBalance)}
-              sub={`≈ ${formatNGN(earnings.satsBalance * 0.9)}`}
-              tone="gold"
-            />
-          </div>
-        </div>
-
-        {/* Connected bank */}
-        <Section title="Payout method" action={
-          <button 
-            onClick={() => setBankEditOpen(true)}
-            className="inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline"
-          >
-            <Pencil className="h-3 w-3" /> Edit
-          </button>
-        }>
-          <div className="flex items-center gap-3">
-            <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-brand-soft text-brand-soft-foreground">
-              <Building2 className="h-5 w-5" />
-            </span>
-            <div className="flex-1">
-              <p className="text-sm font-semibold text-ink">
-                {bankDetails.bankName}
-              </p>
-              <p className="text-xs text-ink-soft">
-                {bankDetails.accountName} · **** {bankDetails.accountNumber.slice(-4)}
-              </p>
-            </div>
-            <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-medium text-brand-soft-foreground">
-              <CheckCircle2 className="h-3 w-3" /> Verified
-            </span>
-          </div>
-        </Section>
-
-        {/* Trend */}
-        <Section title="This month" subtitle="Confirmed earnings">
-          <div className="flex items-end justify-between gap-4">
-            <div>
-              <p className="text-3xl font-semibold tracking-tight text-ink">
-                {formatNGN(earnings.thisMonthNGN)}
-              </p>
-              <p className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
-                <CheckCircle2 className="h-3 w-3" /> +28% vs last month
-              </p>
-            </div>
-            <MiniBars data={earnings.weekly} />
-          </div>
-        </Section>
-
-        {/* Payout history */}
-        <Section title="Payout history">
-          <ul className="divide-y divide-border">
-            {payouts.map((p) => (
-              <li key={p.id} className="flex items-center gap-3 py-3 first:pt-0 last:pb-0">
-                <span
-                  className={cn(
-                    "inline-flex h-9 w-9 items-center justify-center rounded-full",
-                    p.status === "completed"
-                      ? "bg-brand-soft text-brand-soft-foreground"
-                      : p.status === "processing"
-                        ? "bg-amber-100 text-amber-800"
-                        : "bg-slate-100 text-slate-700"
-                  )}
-                >
-                  {p.status === "completed" ? (
-                    <Banknote className="h-4 w-4" />
-                  ) : p.status === "processing" ? (
-                    <Clock className="h-4 w-4" />
-                  ) : (
-                    <Clock className="h-4 w-4" />
-                  )}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-ink">
-                    {formatNGN(p.amountNGN)}
-                  </p>
-                  <p className="text-xs text-ink-soft">
-                    {p.bankRef} · {formatDate(p.at)}
-                  </p>
-                </div>
-                <span
-                  className={cn(
-                    "rounded-full px-2 py-0.5 text-[10px] font-medium capitalize",
-                    p.status === "completed" && "bg-brand-soft text-brand-soft-foreground",
-                    p.status === "processing" && "bg-amber-100 text-amber-800",
-                    p.status === "scheduled" && "bg-slate-100 text-slate-700"
-                  )}
-                >
-                  {p.status}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      </div>
-
-      <Dialog open={withdrawOpen} onOpenChange={setWithdrawOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Withdraw to bank</DialogTitle>
-            <DialogDescription>
-              Funds land in your GTB account within 60 seconds.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            {!withdrawSuccess ? (
-              <>
-                <div>
-                  <Label htmlFor="amt">Amount</Label>
-                  <div className="relative mt-1.5">
-                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-ink-soft">
-                      ₦
-                    </span>
-                    <Input
-                      id="amt"
-                      defaultValue={earnings.availableNGN.toLocaleString("en-NG")}
-                      className="h-12 pl-7 text-lg"
-                    />
-                  </div>
-                  <p className="mt-2 text-xs text-ink-soft">
-                    Available: {formatNGN(earnings.availableNGN)}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-border bg-surface-2/40 p-3 text-sm">
-                  <div className="flex items-center gap-2">
-                    <Building2 className="h-4 w-4 text-ink-soft" />
-                    <span className="font-medium text-ink">
-                      {bankDetails.bankName.split(' ')[0]} ****{bankDetails.accountNumber.slice(-4)}
-                    </span>
-                    <span className="text-ink-soft">· {bankDetails.accountName}</span>
-                  </div>
-                </div>
-              </>
+          <div className="mt-1 flex flex-wrap items-baseline gap-3">
+            {isLoading ? (
+              <Skeleton className="h-9 w-48" />
             ) : (
-              <div className="flex flex-col items-center justify-center py-6 text-center">
-                <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-brand-soft text-brand">
-                  <CheckCircle2 className="h-8 w-8" />
-                </div>
-                <p className="text-base font-semibold text-ink">Withdrawal Scheduled</p>
-                <p className="mt-1 text-sm text-ink-soft">
-                  ₦{earnings.availableNGN.toLocaleString()} is on its way to your bank account.
+              <>
+                <p className="text-3xl font-semibold tracking-tight text-ink tabular-nums sm:text-4xl">
+                  {stats.releasedSats.toLocaleString()} sats
                 </p>
-              </div>
+                <p className="font-mono text-sm tabular-nums text-ink-soft">
+                  ≈ {formatNGN(stats.releasedNGN)}
+                </p>
+              </>
             )}
           </div>
-          {!withdrawSuccess && (
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setWithdrawOpen(false)}>
-                Cancel
-              </Button>
-              <Button 
-                onClick={handleWithdraw}
-                disabled={isWithdrawing}
-                className="bg-brand text-brand-foreground hover:bg-brand/90"
-              >
-                {isWithdrawing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  "Confirm withdrawal"
-                )}
-              </Button>
-            </DialogFooter>
-          )}
-        </DialogContent>
-      </Dialog>
+          <p className="mt-2 text-xs text-ink-soft">
+            Every released sat is verifiable on the Cashu mint. No platform
+            balance — your sats, your keys.
+          </p>
 
-      {/* Edit Bank Dialog */}
-      <Dialog open={bankEditOpen} onOpenChange={setBankEditOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Edit payout method</DialogTitle>
-            <DialogDescription>
-              Update the bank account where you receive your money.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleSaveBank} className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-bank">Bank Name</Label>
-              <Select 
-                value={bankDetails.bankName} 
-                onValueChange={(v) => setBankDetails(prev => ({ ...prev, bankName: v }))}
-              >
-                <SelectTrigger id="edit-bank" className="h-11">
-                  <SelectValue placeholder="Select bank" />
-                </SelectTrigger>
-                <SelectContent>
-                  {[
-                    "Access Bank", "GTBank", "Zenith Bank", "First Bank", "UBA", 
-                    "Opay", "Kuda Bank", "Moniepoint", "Wema Bank"
-                  ].map(b => (
-                    <SelectItem key={b} value={b}>{b}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <Button
+            type="button"
+            onClick={onCashOut}
+            size="lg"
+            className="mt-5 h-12 w-full rounded-lg bg-brand text-base font-semibold text-brand-foreground hover:bg-brand/90 sm:w-auto"
+          >
+            <ArrowDownCircle className="mr-2 h-4 w-4" aria-hidden />
+            Cash out to Naira · Coming soon
+          </Button>
+        </section>
+
+        {/* 2. Stats grid */}
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <StatCard
+            icon={ShieldCheck}
+            label="Locked in escrow"
+            value={isLoading ? null : `${stats.lockedSats.toLocaleString()} sats`}
+            sub={isLoading ? null : `≈ ${formatNGN(stats.lockedNGN)}`}
+            footnote={
+              stats.toShipCount > 0
+                ? `${stats.toShipCount} order${stats.toShipCount === 1 ? "" : "s"} to ship`
+                : "All caught up"
+            }
+            footnoteTone={stats.toShipCount > 0 ? "warn" : "ok"}
+          />
+          <StatCard
+            icon={TrendingUp}
+            label="This month"
+            value={isLoading ? null : `${stats.monthSats.toLocaleString()} sats`}
+            sub={isLoading ? null : `≈ ${formatNGN(stats.monthNGN)}`}
+            footnote={
+              stats.monthCount > 0
+                ? `${stats.monthCount} release${stats.monthCount === 1 ? "" : "s"}`
+                : "No releases yet this month"
+            }
+          />
+          <StatCard
+            icon={CheckCircle2}
+            label="Completed orders"
+            value={isLoading ? null : String(stats.completedCount)}
+            sub={isLoading ? null : "all time"}
+            footnote={
+              stats.completedCount > 0
+                ? `Latest · ${formatRelative(completed[0]?.releasedAt ?? completed[0]?.updatedAt ?? "")}`
+                : "When buyers release, they show up here"
+            }
+          />
+        </section>
+
+        {/* 3. Bank-on-file panel — honest empty state */}
+        <BankPanel />
+
+        {/* 4. Payout history (=completed orders) */}
+        <section className="overflow-hidden rounded-2xl border border-border bg-white">
+          <header className="flex items-center justify-between gap-3 border-b border-border bg-surface px-4 py-3">
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+                Payout history
+              </p>
+              <p className="mt-0.5 text-xs text-ink-soft">
+                Every order the buyer released. Newest first.
+              </p>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-acct">Account Number</Label>
-              <Input
-                id="edit-acct"
-                value={bankDetails.accountNumber}
-                onChange={(e) => setBankDetails(prev => ({ ...prev, accountNumber: e.target.value }))}
-                placeholder="0123456789"
-                className="h-11"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-name">Account Name</Label>
-              <Input
-                id="edit-name"
-                value={bankDetails.accountName}
-                onChange={(e) => setBankDetails(prev => ({ ...prev, accountName: e.target.value }))}
-                placeholder="Full Name"
-                className="h-11"
-              />
-            </div>
-            <DialogFooter className="pt-4">
-              <Button type="button" variant="outline" onClick={() => setBankEditOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" className="bg-brand text-brand-foreground hover:bg-brand/90">
-                Save changes
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+            <Link
+              to="/app/orders"
+              className="inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand rounded"
+            >
+              All orders <ArrowRight className="h-3 w-3" aria-hidden />
+            </Link>
+          </header>
+
+          {isLoading ? (
+            <PayoutSkeleton />
+          ) : !seller ? (
+            <EmptyNotSignedUp />
+          ) : completed.length === 0 ? (
+            <EmptyNoPayouts toShipCount={stats.toShipCount} />
+          ) : (
+            <>
+              {/* Desktop table */}
+              <div className="hidden overflow-x-auto sm:block">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-border bg-white text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+                    <tr>
+                      <th className="px-4 py-3">Order</th>
+                      <th className="px-4 py-3">Buyer</th>
+                      <th className="px-4 py-3 text-right">Amount</th>
+                      <th className="px-4 py-3">Released</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {completed.map((o) => (
+                      <PayoutRow key={o.orderToken} order={o} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Mobile stacked cards */}
+              <ul className="divide-y divide-border sm:hidden">
+                {completed.map((o) => (
+                  <PayoutMobile key={o.orderToken} order={o} />
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+
+        {/* 5. Footnote — what 'released' actually means cryptographically */}
+        <p className="px-1 text-[11px] italic leading-relaxed text-ink-soft">
+          Sats settle on Cashu testnet for the hackathon. Mainnet Lightning
+          melt to your wallet is a single config swap planned right after
+          submission — the cryptographic release path is already fully
+          working end-to-end.
+        </p>
+      </div>
     </AppShell>
   );
 }
 
-function Balance({
+/* ----------------------------------------------------------------------- */
+/*                            Aggregation                                  */
+/* ----------------------------------------------------------------------- */
+
+interface Stats {
+  releasedSats: number;
+  releasedNGN: number;
+  lockedSats: number;
+  lockedNGN: number;
+  monthSats: number;
+  monthNGN: number;
+  monthCount: number;
+  completedCount: number;
+  toShipCount: number;
+}
+
+function computeStats(orders: SellerOrderRow[]): Stats {
+  const firstOfMonthMs = (() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  })();
+
+  let releasedSats = 0;
+  let releasedNGN = 0;
+  let lockedSats = 0;
+  let lockedNGN = 0;
+  let monthSats = 0;
+  let monthNGN = 0;
+  let monthCount = 0;
+  let completedCount = 0;
+  let toShipCount = 0;
+
+  for (const o of orders) {
+    if (o.status === "completed") {
+      releasedSats += o.amountSats;
+      releasedNGN += o.amountNGN;
+      completedCount += 1;
+
+      const releasedAt = o.releasedAt ? Date.parse(o.releasedAt) : null;
+      if (releasedAt && releasedAt >= firstOfMonthMs) {
+        monthSats += o.amountSats;
+        monthNGN += o.amountNGN;
+        monthCount += 1;
+      }
+    } else if (o.status === "payment_locked") {
+      lockedSats += o.amountSats;
+      lockedNGN += o.amountNGN;
+      toShipCount += 1;
+    }
+  }
+
+  return {
+    releasedSats,
+    releasedNGN,
+    lockedSats,
+    lockedNGN,
+    monthSats,
+    monthNGN,
+    monthCount,
+    completedCount,
+    toShipCount,
+  };
+}
+
+/* ----------------------------------------------------------------------- */
+/*                            Subcomponents                                */
+/* ----------------------------------------------------------------------- */
+
+function StatCard({
   icon: Icon,
   label,
   value,
   sub,
-  tone,
+  footnote,
+  footnoteTone,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
   label: string;
-  value: string;
-  sub: string;
-  tone?: "gold";
+  value: string | null;
+  sub: string | null;
+  footnote: string;
+  footnoteTone?: "warn" | "ok";
 }) {
   return (
-    <div className="p-4">
-      <div className="flex items-center gap-2">
-        <span
-          className={cn(
-            "inline-flex h-7 w-7 items-center justify-center rounded-full",
-            tone === "gold" ? "bg-gold-soft text-amber-700" : "bg-brand-soft text-brand-soft-foreground"
-          )}
-        >
-          <Icon className="h-3.5 w-3.5" />
-        </span>
-        <p className="text-xs font-medium uppercase tracking-wider text-ink-soft">
+    <div className="rounded-2xl border border-border bg-white p-5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
           {label}
         </p>
+        <Icon className="h-4 w-4 text-ink-soft" aria-hidden />
       </div>
-      <p className="mt-2 text-base font-semibold text-ink">{value}</p>
-      <p className="mt-0.5 text-[11px] text-ink-soft">{sub}</p>
+      <div className="mt-2 min-h-[2rem]">
+        {value === null ? (
+          <Skeleton className="h-6 w-32" />
+        ) : (
+          <p className="text-xl font-semibold tabular-nums text-ink">{value}</p>
+        )}
+      </div>
+      <div className="mt-0.5 min-h-[1rem]">
+        {sub === null ? (
+          <Skeleton className="h-3 w-20" />
+        ) : (
+          <p className="text-[11px] tabular-nums text-ink-soft">{sub}</p>
+        )}
+      </div>
+      <p
+        className={
+          "mt-3 border-t border-border pt-3 text-[11px] " +
+          (footnoteTone === "warn"
+            ? "text-amber-800"
+            : footnoteTone === "ok"
+              ? "text-brand-soft-foreground"
+              : "text-ink-soft")
+        }
+      >
+        {footnote}
+      </p>
     </div>
   );
 }
 
-function Section({
-  title,
-  subtitle,
-  action,
-  children,
-}: {
-  title: string;
-  subtitle?: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}) {
+function BankPanel() {
   return (
-    <section className="rounded-2xl border border-border bg-white p-5 shadow-[0_8px_24px_-16px_rgba(15,42,30,0.12)]">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-semibold text-ink">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-xs text-ink-soft">{subtitle}</p>}
+    <section className="rounded-2xl border border-dashed border-border bg-white p-5 sm:p-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-surface text-ink-soft">
+          <Building2 className="h-5 w-5" aria-hidden />
         </div>
-        {action}
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-ink">
+            No bank account on file yet
+          </p>
+          <p className="mt-1 text-sm text-ink-soft">
+            Naira payouts via Bitnob need a Nigerian bank account on file.
+            We'll wire this up right after Hack4Freedom — for now your sats
+            are settled on Cashu testnet and a mainnet swap is a one-line
+            backend change.
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          disabled
+          className="shrink-0 cursor-not-allowed opacity-60"
+          title="Bitnob payout integration ships after the hackathon"
+        >
+          Add bank · Coming soon
+        </Button>
       </div>
-      <div className="mt-4">{children}</div>
     </section>
   );
 }
 
-function _EditButton() {
+function PayoutRow({ order }: { order: SellerOrderRow }) {
   return (
-    <button className="inline-flex items-center gap-1 text-xs font-medium text-brand hover:underline">
-      <Pencil className="h-3 w-3" /> Edit
-    </button>
+    <tr className="hover:bg-surface">
+      <td className="px-4 py-3 align-middle">
+        <div className="flex items-center gap-3">
+          <ListingThumb
+            image={order.listing.images[0]}
+            alt={order.listing.title}
+            size={40}
+          />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium text-ink">
+              {order.listing.title}
+            </p>
+            <p className="mt-0.5 font-mono text-[11px] tabular-nums text-ink-soft">
+              {order.shortId}
+            </p>
+          </div>
+        </div>
+      </td>
+      <td className="px-4 py-3 align-middle">
+        <p className="truncate text-sm text-ink">{order.buyerName}</p>
+        <p className="mt-0.5 truncate text-xs text-ink-soft">
+          {order.buyerCity}
+        </p>
+      </td>
+      <td className="px-4 py-3 align-middle text-right">
+        <p className="text-sm font-semibold tabular-nums text-ink">
+          {formatNGN(order.amountNGN)}
+        </p>
+        <p className="mt-0.5 text-[11px] tabular-nums text-ink-soft">
+          {order.amountSats.toLocaleString()} sats
+        </p>
+      </td>
+      <td className="px-4 py-3 align-middle">
+        <div className="flex items-center gap-2">
+          <EscrowStatusPill status={order.status} size="sm" />
+          <span className="text-[11px] text-ink-soft">
+            {formatRelative(order.releasedAt ?? order.updatedAt)}
+          </span>
+        </div>
+      </td>
+    </tr>
   );
 }
 
-function MiniBars({ data }: { data: { day: string; value: number }[] }) {
-  const max = Math.max(...data.map((d) => d.value));
+function PayoutMobile({ order }: { order: SellerOrderRow }) {
   return (
-    <div className="flex h-14 items-end gap-1.5">
-      {data.map((d) => (
-        <div
-          key={d.day}
-          className="w-2 rounded-sm bg-brand/30"
-          style={{ height: `${(d.value / max) * 100}%` }}
+    <li className="px-4 py-4">
+      <div className="flex items-center gap-3">
+        <ListingThumb
+          image={order.listing.images[0]}
+          alt={order.listing.title}
+          size={40}
         />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-ink">
+            {order.listing.title}
+          </p>
+          <p className="mt-0.5 font-mono text-[11px] tabular-nums text-ink-soft">
+            {order.shortId}
+          </p>
+        </div>
+        <div className="shrink-0 text-right">
+          <p className="text-sm font-semibold tabular-nums text-ink">
+            {formatNGN(order.amountNGN)}
+          </p>
+          <p className="mt-0.5 text-[11px] tabular-nums text-ink-soft">
+            {order.amountSats.toLocaleString()} sats
+          </p>
+        </div>
+      </div>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <p className="text-xs text-ink-soft">
+          {order.buyerName}, {order.buyerCity}
+        </p>
+        <span className="text-[11px] text-ink-soft">
+          {formatRelative(order.releasedAt ?? order.updatedAt)}
+        </span>
+      </div>
+    </li>
+  );
+}
+
+/* ----------------------------------------------------------------------- */
+/*                            Empty / loading                              */
+/* ----------------------------------------------------------------------- */
+
+function PayoutSkeleton() {
+  return (
+    <ul className="divide-y divide-border">
+      {[0, 1, 2].map((i) => (
+        <li key={i} className="px-4 py-4">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-10 w-10 rounded-xl" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-3 w-1/3" />
+            </div>
+            <div className="shrink-0 space-y-2 text-right">
+              <Skeleton className="ml-auto h-4 w-16" />
+              <Skeleton className="ml-auto h-3 w-12" />
+            </div>
+          </div>
+        </li>
       ))}
+    </ul>
+  );
+}
+
+function EmptyNotSignedUp() {
+  return (
+    <div className="border-t border-border p-10 text-center">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-surface text-ink-soft">
+        <Wallet className="h-6 w-6" aria-hidden />
+      </div>
+      <p className="mt-4 text-base font-semibold text-ink">
+        Finish signing up to see your payouts
+      </p>
+      <p className="mx-auto mt-2 max-w-sm text-sm text-ink-soft">
+        You'll see every released order here once your seller profile is
+        live.
+      </p>
+      <Link
+        to="/onboarding"
+        className="mt-5 inline-flex h-11 items-center rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground hover:bg-brand/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+      >
+        Complete signup
+      </Link>
+    </div>
+  );
+}
+
+function EmptyNoPayouts({ toShipCount }: { toShipCount: number }) {
+  return (
+    <div className="border-t border-border p-10 text-center">
+      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-surface text-ink-soft">
+        <Clock className="h-6 w-6" aria-hidden />
+      </div>
+      <p className="mt-4 text-base font-semibold text-ink">No payouts yet</p>
+      <p className="mx-auto mt-2 max-w-sm text-sm text-ink-soft">
+        {toShipCount > 0
+          ? `You have ${toShipCount} order${toShipCount === 1 ? "" : "s"} locked in escrow. Mark them shipped, the buyer releases, and the sats land here.`
+          : "When a buyer releases their first payment, it'll appear here. Share your listing link to bring in your first sale."}
+      </p>
+      <Link
+        to="/app/orders"
+        className="mt-5 inline-flex h-11 items-center rounded-lg border border-border bg-white px-4 text-sm font-medium text-ink hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2"
+      >
+        Go to orders
+      </Link>
     </div>
   );
 }

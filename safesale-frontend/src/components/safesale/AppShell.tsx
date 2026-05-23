@@ -12,7 +12,6 @@ import {
   Bell,
   Search,
   Scale,
-  ArrowLeft,
 } from "lucide-react";
 
 import { useCurrentSeller } from "@/hooks/useCurrentSeller";
@@ -113,18 +112,14 @@ export function AppShell({ children, title, subtitle, action }: Props) {
     <div className="min-h-screen bg-surface text-foreground">
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-border bg-background lg:flex lg:flex-col">
-        <div className="flex h-16 items-center justify-between border-b border-border px-5">
-          <Link to="/app" aria-label="Dashboard home">
+        <div className="flex h-16 items-center border-b border-border px-5">
+          {/* Logo always returns to the marketing landing page —
+              the standard SaaS convention. The sidebar's 'Home' nav
+              item below is the dashboard home; the brand-mark up here
+              is the marketing home. Two different "homes," same as
+              Stripe / Shopify / Linear. */}
+          <Link to="/" aria-label="SafeSale home">
             <Logo />
-          </Link>
-          <Link
-            to="/"
-            className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-ink-soft hover:bg-secondary hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-            aria-label="Back to marketing home"
-            title="Back to landing page"
-          >
-            <ArrowLeft className="h-3 w-3" />
-            Home
           </Link>
         </div>
         <nav className="flex-1 overflow-y-auto px-3 py-4">
@@ -180,7 +175,7 @@ export function AppShell({ children, title, subtitle, action }: Props) {
         {/* Top bar */}
         <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur-md">
           <div className="flex h-14 items-center gap-3 px-4 lg:h-16 lg:px-8">
-            <Link to="/app" className="lg:hidden">
+            <Link to="/" className="lg:hidden" aria-label="SafeSale home">
               <LogoMark />
             </Link>
             <div className="flex-1 min-w-0">

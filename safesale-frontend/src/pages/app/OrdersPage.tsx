@@ -32,6 +32,7 @@ import { Link } from "react-router-dom";
 
 import { AppShell } from "@/components/safesale/AppShell";
 import { EscrowStatusPill } from "@/components/safesale/EscrowStatus";
+import { ListingThumb } from "@/components/safesale/ListingThumb";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -44,13 +45,9 @@ import {
 
 import { useCurrentSeller } from "@/hooks/useCurrentSeller";
 import { useSellerOrders } from "@/hooks/useSellerOrders";
-import type {
-  ApiListingImage,
-  ApiOrderStatus,
-  SellerOrderRow,
-} from "@/lib/api";
+import type { ApiOrderStatus, SellerOrderRow } from "@/lib/api";
 import { formatNGN, formatRelative } from "@/lib/format";
-import { cn, sanitizeUrl } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 /* ------------------------------ filter spec ----------------------------- */
 
@@ -397,58 +394,6 @@ function OrderMobileCard({ order }: { order: SellerOrderRow }) {
       </Link>
     </li>
   );
-}
-
-/* ------------------------------ thumbnails ----------------------------- */
-
-/**
- * Backend listings carry Blossom URLs; fixture / seed-only listings fall
- * back to a deterministic gradient placeholder. This helper is cloned in
- * three files (here, OrderDetailPage.tsx, BuyerOrder.tsx) — collapse in
- * the post-launch refactor pass scoped in PROGRESS.md.
- */
-function ListingThumb({
-  image,
-  alt,
-  size,
-}: {
-  image: ApiListingImage | undefined;
-  alt: string;
-  size: number;
-}) {
-  const url = image?.url ? sanitizeUrl(image.url) : undefined;
-  const cls = "shrink-0 rounded-xl object-cover";
-  const dim = { width: size, height: size };
-  if (url) {
-    return (
-      <img
-        src={url}
-        alt={alt}
-        loading="lazy"
-        className={cls}
-        style={dim}
-      />
-    );
-  }
-  const seed = image?.seed ?? alt;
-  return (
-    <div
-      aria-hidden
-      className="flex shrink-0 items-center justify-center rounded-xl bg-surface text-ink-soft"
-      style={{
-        ...dim,
-        background: `linear-gradient(135deg, hsl(${((hash(seed) % 360) + 360) % 360} 35% 88%), hsl(${(((hash(seed) * 7) % 360) + 360) % 360} 30% 80%))`,
-      }}
-    >
-      <Package className="h-5 w-5 opacity-60" />
-    </div>
-  );
-}
-
-function hash(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-  return h;
 }
 
 /* ------------------------- skeleton + empties -------------------------- */

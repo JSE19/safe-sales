@@ -13,6 +13,7 @@ import { NostrLoginProvider } from '@nostrify/react/login';
 import { AppProvider } from '@/components/AppProvider';
 import { AppConfig } from '@/contexts/AppContext';
 import { APP_RELAYS } from '@/lib/appRelays';
+import { ErrorBoundary } from '@/components/safesale/ErrorBoundary';
 import AppRouter from './AppRouter';
 const head = createHead({
   plugins: [
@@ -54,9 +55,11 @@ export function App() {
               <NostrSync />
               <TooltipProvider>
                 <Toaster />
-                <Suspense>
-                  <AppRouter />
-                </Suspense>
+                <ErrorBoundary>
+                  <Suspense>
+                    <AppRouter />
+                  </Suspense>
+                </ErrorBoundary>
               </TooltipProvider>
             </NostrProvider>
           </NostrLoginProvider>

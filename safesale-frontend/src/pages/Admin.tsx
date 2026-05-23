@@ -1,566 +1,866 @@
+/**
+ * Admin / Mediator Dispute Dashboard — `/admin`.
+ *
+ * The mediator's working surface: queue of open disputes, click into
+ * one to see both sides' evidence, sign a resolution.
+ *
+ * Access control: this route is wrapped in `MediatorGate` at the
+ * router level (`src/AppRouter.tsx`). The component below assumes
+ * the viewer is the trusted mediator npub — no in-component gating.
+ *
+ * Data source — IMPORTANT:
+ *
+ *   For the Hack4Freedom submission this page is intentionally fed by
+ *   fixtures defined inline below. The backend (Joy's branch) has
+ *   the mediator key and the Dispute table, but the HTTP endpoints
+ *   the frontend would call — `GET /api/admin/disputes`,
+ *   `GET /api/admin/disputes/:id`, `POST /api/admin/disputes/:id/resolve`
+ *   (all enumerated in `BACKEND.md`) — aren't shipped yet, and the
+ *   Nostr kind-33889 resolution-publishing path isn't wired either
+ *   (per PROGRESS.md PRD delta #7).
+ *
+ *   Two reasons to ship the page now anyway:
+ *
+ *     1. Visually completes the 9/9 screen set so the demo deck is
+ *        whole regardless of what the backend lands by submission day.
+ *     2. The wiring is a literal find/replace once backend ships:
+ *        swap the `DISPUTES` constant for a `useAdminDisputes()` hook
+ *        that hits the endpoint above, and swap the local resolve
+ *        toast for a `apiClient.resolveDispute(...)` mutation. The
+ *        component structure stays.
+ *
+ *   The "Resolve" action shows an honest "coming soon" toast — same
+ *   pattern we use elsewhere on this codebase when frontend is ready
+ *   but backend isn't.
+ */
+
 import { useSeoMeta } from "@unhead/react";
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { Logo } from "@/components/safesale/Logo";
+import { useMemo, useState } from "react";
+
+import { AppShell } from "@/components/safesale/AppShell";
 import { Avatar } from "@/components/safesale/Avatar";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
-import { ProductImage } from "@/components/safesale/ProductImage";
-import { Timeline } from "@/components/safesale/Timeline";
-import {
-  disputes,
-  getOrder,
-  getListing,
-  currentSeller,
-  chat,
-} from "@/lib/mock";
-import { formatNGN, formatRelative, formatTime } from "@/lib/format";
-import {
-  Search,
-  ImageIcon,
-  ArrowRight,
-  ChevronLeft,
-  Undo2,
-  CheckCircle2,
-  Split,
-  MessageSquare,
-  Layers,
-} from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { DisputeResolutionCard } from "@/components/safesale/DisputeResolution";
-import { ReturnFlow } from "@/components/safesale/ReturnFlow";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Calendar,
+  CheckCircle2,
+  Gavel,
+  Package,
+  Scale,
+  Search,
+  ShieldCheck,
+} from "lucide-react";
+
+import { useToast } from "@/hooks/useToast";
+import { formatNGN, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import type { Dispute, DisputeResolution } from "@/lib/types";
+
+/* ----------------------------------------------------------------------- */
+/*                            Demo fixtures                                */
+/* ----------------------------------------------------------------------- */
+
+type DisputePriority = "high" | "medium" | "low";
+type DisputeQueueStatus = "escalated" | "evidence_requested" | "mediating";
+type DisputeOutcome = "refund_buyer" | "release_seller" | "split";
+
+interface DisputeFixture {
+  id: string;
+  shortId: string;
+  orderShortId: string;
+  status: DisputeQueueStatus;
+  priority: DisputePriority;
+  openedBy: "buyer" | "seller";
+  openedAt: string;
+  evidenceDueAt: string;
+  reason: string;
+  summary: string;
+  amountNGN: number;
+  amountSats: number;
+  seller: {
+    handle: string;
+    name: string;
+    location: string;
+  };
+  buyer: {
+    name: string;
+    city: string;
+  };
+  listing: {
+    title: string;
+  };
+  evidence: {
+    buyer: string[];
+    seller: string[];
+  };
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
+const now = Date.now();
+const iso = (offsetMs: number): string => new Date(now + offsetMs).toISOString();
+
+const DISPUTES: DisputeFixture[] = [
+  {
+    id: "dsp_7k3m",
+    shortId: "DSP-7K3M",
+    orderShortId: "ORD-9X1B",
+    status: "escalated",
+    priority: "high",
+    openedBy: "buyer",
+    openedAt: iso(-3 * DAY),
+    evidenceDueAt: iso(2 * DAY),
+    reason: "Item arrived with a tear on the strap",
+    summary:
+      "Buyer received the Coach Crossbody and a tear is visible at the base of the strap. Seller claims the bag was inspected before shipping.",
+    amountNGN: 67_500,
+    amountSats: 112_500,
+    seller: { handle: "amaka.thrift", name: "Amaka O.", location: "Lagos" },
+    buyer: { name: "Aisha Bello", city: "Kano" },
+    listing: { title: "Coach Leather Crossbody — Tan" },
+    evidence: {
+      buyer: [
+        "Photo of the strap damage at unboxing.",
+        "Original listing photo (no damage visible).",
+        "Buyer's statement: 'The torn area was clearly there before shipping.'",
+      ],
+      seller: [
+        "Pre-ship photo on inspection table.",
+        "Shipping receipt with weight and handler signature.",
+        "Seller's statement: 'It left here in perfect condition.'",
+      ],
+    },
+  },
+  {
+    id: "dsp_4p2q",
+    shortId: "DSP-4P2Q",
+    orderShortId: "ORD-2L8N",
+    status: "evidence_requested",
+    priority: "medium",
+    openedBy: "seller",
+    openedAt: iso(-1 * DAY),
+    evidenceDueAt: iso(3 * DAY),
+    reason: "Buyer claims non-delivery; seller has tracking proof",
+    summary:
+      "Seller marked shipped 6 days ago with GIG Logistics tracking. Buyer says no package received. Awaiting carrier receipt + recipient signature.",
+    amountNGN: 35_000,
+    amountSats: 58_300,
+    seller: { handle: "lagos.silk", name: "Funmi A.", location: "Ibadan" },
+    buyer: { name: "Funmi Adesina", city: "Ibadan" },
+    listing: { title: "Silk Wrap Midi Dress — Emerald" },
+    evidence: {
+      buyer: ["Statement: 'I've been home all week, nothing came.'"],
+      seller: [
+        "GIG tracking number GIG987654 — status: in transit.",
+        "Pre-ship photo on packaging.",
+      ],
+    },
+  },
+  {
+    id: "dsp_9x1b",
+    shortId: "DSP-9X1B",
+    orderShortId: "ORD-5R3T",
+    status: "mediating",
+    priority: "low",
+    openedBy: "buyer",
+    openedAt: iso(-6 * HOUR),
+    evidenceDueAt: iso(4 * DAY),
+    reason: "Wrong colour shipped (buyer expected white, received cream)",
+    summary:
+      "Both parties want resolution; seller has offered a 20% refund or full return. Buyer reviewing options.",
+    amountNGN: 185_000,
+    amountSats: 308_300,
+    seller: { handle: "soundbox", name: "Ifeanyi O.", location: "Lagos" },
+    buyer: { name: "Ifeanyi Obi", city: "Port Harcourt" },
+    listing: { title: "Apple AirPods Pro 2 — Sealed" },
+    evidence: {
+      buyer: ["Photo of received cream-coloured box; listing showed white."],
+      seller: ["Original supplier listing — 'starlight (cream-white)' variant."],
+    },
+  },
+];
+
+/* ----------------------------------------------------------------------- */
+/*                                Page                                     */
+/* ----------------------------------------------------------------------- */
+
+type FilterKey = "open" | "evidence" | "mediating" | "all";
+
+interface FilterSpec {
+  key: FilterKey;
+  label: string;
+  matches: (s: DisputeQueueStatus) => boolean;
+}
+
+const FILTERS: FilterSpec[] = [
+  { key: "all", label: "All", matches: () => true },
+  {
+    key: "open",
+    label: "Escalated",
+    matches: (s) => s === "escalated",
+  },
+  {
+    key: "evidence",
+    label: "Awaiting evidence",
+    matches: (s) => s === "evidence_requested",
+  },
+  {
+    key: "mediating",
+    label: "Mediating",
+    matches: (s) => s === "mediating",
+  },
+];
 
 export default function Admin() {
-  useSeoMeta({ title: "Mediator portal — SafeSale" });
-  const [selectedId, setSelectedId] = useState<string>(disputes[0].id);
-  const selected = disputes.find((d) => d.id === selectedId)!;
+  useSeoMeta({ title: "Mediator dashboard — SafeSale" });
+
+  const [filter, setFilter] = useState<FilterKey>("all");
+  const [query, setQuery] = useState("");
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  const filtered = useMemo(() => {
+    const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
+    const q = query.trim().toLowerCase();
+    return DISPUTES.filter((d) => {
+      if (!f.matches(d.status)) return false;
+      if (!q) return true;
+      return (
+        d.shortId.toLowerCase().includes(q) ||
+        d.orderShortId.toLowerCase().includes(q) ||
+        d.reason.toLowerCase().includes(q) ||
+        d.seller.handle.toLowerCase().includes(q) ||
+        d.buyer.name.toLowerCase().includes(q)
+      );
+    });
+  }, [filter, query]);
+
+  const active = activeId
+    ? DISPUTES.find((d) => d.id === activeId) ?? null
+    : null;
 
   return (
-    <div className="min-h-screen bg-surface text-foreground">
-      <header className="border-b border-border bg-background">
-        <div className="container flex h-14 items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link
-              to="/"
-              className="inline-flex items-center gap-1 text-xs font-medium text-ink-soft hover:text-ink"
-            >
-              <ChevronLeft className="h-3.5 w-3.5" /> Site
-            </Link>
-            <span className="hidden h-4 w-px bg-border sm:block" />
-            <Logo />
-            <span className="hidden rounded-md bg-secondary px-2 py-0.5 text-[10px] font-medium text-ink-soft sm:inline-block">
-              Mediator portal
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="hidden text-xs text-ink-soft md:inline-block">
-              Mediator
-            </span>
-            <Avatar seed="mediator-1" name="Niyi" size={32} />
+    <AppShell
+      title="Mediator dashboard"
+      subtitle="Sign a resolution and a Nostr kind 33889 event publishes for the whole network to verify."
+    >
+      <div className="space-y-6">
+        {/* Hackathon-honesty banner */}
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
+          <Scale className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden />
+          <div className="text-sm">
+            <p className="font-medium">Hackathon demo surface</p>
+            <p className="mt-1 text-xs text-amber-800">
+              Backend admin endpoints + kind-33889 publishing land right
+              after Hack4Freedom. This page reads from local fixtures so the
+              mediator UX is reviewable end-to-end today. Resolving here
+              shows the flow but doesn't write anything yet.
+            </p>
           </div>
         </div>
-      </header>
 
-      <div className="grid h-[calc(100dvh-3.5rem)] grid-rows-[auto,1fr] lg:grid-cols-[320px,1fr] lg:grid-rows-1">
-        {/* Queue */}
-        <aside className="border-b border-border bg-background lg:overflow-y-auto lg:border-b-0 lg:border-r">
-          <div className="sticky top-0 z-10 border-b border-border bg-background p-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-ink">Dispute queue</h2>
-              <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-700">
-                {disputes.filter((d) => d.status !== "resolved").length} open
-              </span>
-            </div>
-            <div className="relative mt-3">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-soft" />
-              <Input
-                placeholder="Search disputes"
-                className="h-9 pl-8 text-sm"
-              />
-            </div>
-            <div className="mt-3 flex gap-1.5 overflow-x-auto pb-1 text-xs">
-              {["All", "Direct", "Escalated", "Evidence", "Resolved"].map((t) => (
-                <button
-                  key={t}
-                  className={cn(
-                    "shrink-0 rounded-full border px-2.5 py-1 font-medium transition-colors",
-                    t === "All"
-                      ? "border-ink bg-ink text-background"
-                      : "border-border bg-white text-ink-soft hover:text-ink"
-                  )}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <ul className="divide-y divide-border">
-            {disputes.map((d) => (
-              <li key={d.id}>
-                <button
-                  onClick={() => setSelectedId(d.id)}
-                  className={cn(
-                    "block w-full px-4 py-3 text-left transition-colors",
-                    d.id === selectedId
-                      ? "bg-brand-soft/40"
-                      : "hover:bg-secondary"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-ink">
-                        {d.reason}
-                      </p>
-                      <p className="mt-0.5 truncate text-[11px] text-ink-soft">
-                        {d.orderId} · {formatNGN(d.amountNGN)} ·{" "}
-                        {formatRelative(d.openedAt)}
-                      </p>
-                    </div>
-                    <PriorityDot priority={d.priority} />
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-1 text-[10px]">
-                    <span
-                      className={cn(
-                        "rounded px-1.5 py-0.5 font-medium",
-                        d.status === "direct_resolution" && "bg-amber-100 text-amber-800",
-                        d.status === "escalated" && "bg-rose-100 text-rose-700",
-                        d.status === "evidence_requested" && "bg-rose-100 text-rose-700",
-                        d.status === "mediating" && "bg-sky-100 text-sky-700",
-                        d.status === "resolved" && "bg-emerald-100 text-emerald-800"
-                      )}
-                    >
-                      {d.status.replace(/_/g, " ")}
-                    </span>
-                    <span className="rounded bg-secondary px-1.5 py-0.5 text-ink-soft">
-                      <ImageIcon className="mr-0.5 inline h-2.5 w-2.5" />
-                      buyer {d.buyerEvidence}
-                    </span>
-                    <span className="rounded bg-secondary px-1.5 py-0.5 text-ink-soft">
-                      <ImageIcon className="mr-0.5 inline h-2.5 w-2.5" />
-                      seller {d.sellerEvidence}
-                    </span>
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </aside>
-
-        {/* Detail */}
-        <main className="overflow-y-auto bg-surface">
-          <DisputeDetail dispute={selected} />
-        </main>
+        {!active ? (
+          <DisputeQueue
+            disputes={filtered}
+            filter={filter}
+            onFilterChange={setFilter}
+            query={query}
+            onQueryChange={setQuery}
+            onOpen={setActiveId}
+          />
+        ) : (
+          <DisputeDetail
+            dispute={active}
+            onBack={() => setActiveId(null)}
+          />
+        )}
       </div>
-    </div>
+    </AppShell>
   );
 }
 
-function PriorityDot({ priority }: { priority: Dispute["priority"] }) {
-  return (
-    <span
-      className={cn(
-        "inline-block h-2 w-2 shrink-0 rounded-full",
-        priority === "high" && "bg-rose-500",
-        priority === "medium" && "bg-amber-500",
-        priority === "low" && "bg-slate-400"
-      )}
-      title={priority}
-    />
-  );
-}
+/* ----------------------------------------------------------------------- */
+/*                             Queue view                                  */
+/* ----------------------------------------------------------------------- */
 
-function DisputeDetail({ dispute }: { dispute: Dispute }) {
-  const order = getOrder(dispute.orderId);
-  const listing = order ? getListing(order.listingId) : undefined;
-  const [outcome, setOutcome] = useState<"release" | "refund" | "split">("split");
-  const [splitPct, setSplitPct] = useState(60);
-  const [reasoning, setReasoning] = useState("");
-
-  // Local resolution state — lets the mediator submit and immediately see
-  // the same resolution card the buyer and seller will see.
-  const [localResolution, setLocalResolution] = useState<DisputeResolution | null>(
-    dispute.resolution ?? null
-  );
-
-  // Reset when a different dispute is selected.
-  useEffect(() => {
-    /* eslint-disable react-hooks/set-state-in-effect */
-    setLocalResolution(dispute.resolution ?? null);
-    setOutcome("split");
-    setSplitPct(60);
-    setReasoning("");
-    /* eslint-enable react-hooks/set-state-in-effect */
-  }, [dispute.id, dispute.resolution]);
-
-  const submitResolution = () => {
-    const buyerRefundNGN =
-      outcome === "refund"
-        ? dispute.amountNGN
-        : outcome === "release"
-          ? 0
-          : Math.round((dispute.amountNGN * splitPct) / 100);
-    const sellerReleaseNGN = dispute.amountNGN - buyerRefundNGN;
-    setLocalResolution({
-      outcome,
-      buyerRefundNGN,
-      sellerReleaseNGN,
-      reasoning: reasoning.trim() ||
-        (outcome === "release"
-          ? "Evidence supports the seller. Full payment released."
-          : outcome === "refund"
-            ? "Evidence supports the buyer. Full refund issued."
-            : "Both sides have valid concerns. Partial split applied."),
-      mediator: "You · SafeSale mediator",
-      resolvedAt: new Date().toISOString(),
-    });
-    if (typeof window !== "undefined") {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
+function DisputeQueue({
+  disputes,
+  filter,
+  onFilterChange,
+  query,
+  onQueryChange,
+  onOpen,
+}: {
+  disputes: DisputeFixture[];
+  filter: FilterKey;
+  onFilterChange: (f: FilterKey) => void;
+  query: string;
+  onQueryChange: (q: string) => void;
+  onOpen: (id: string) => void;
+}) {
+  const counts: Record<FilterKey, number> = {
+    all: DISPUTES.length,
+    open: DISPUTES.filter((d) => d.status === "escalated").length,
+    evidence: DISPUTES.filter((d) => d.status === "evidence_requested").length,
+    mediating: DISPUTES.filter((d) => d.status === "mediating").length,
   };
 
   return (
-    <div className="space-y-4 p-4 sm:p-6">
-      {/* Header */}
-      <div className="rounded-2xl border border-border bg-white p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="rounded-md bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700">
-                {dispute.reason}
-              </span>
-              <PriorityDot priority={dispute.priority} />
-              <span className="text-[11px] uppercase tracking-wider text-ink-soft">
-                {dispute.priority} priority
-              </span>
-            </div>
-            <h1 className="mt-2 text-lg font-semibold tracking-tight text-ink sm:text-xl">
-              {order?.shortId} · {listing?.title}
-            </h1>
-            <p className="mt-1 text-xs text-ink-soft">
-              Opened {formatRelative(dispute.openedAt)} by{" "}
-              <span className="font-medium text-ink">{dispute.openedBy}</span>
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="text-[10px] uppercase tracking-wider text-ink-soft">
-              Amount in escrow
-            </p>
-            <p className="text-2xl font-semibold tabular-nums text-ink">
-              {formatNGN(dispute.amountNGN)}
-            </p>
-          </div>
+    <>
+      {/* Search + filters */}
+      <section className="space-y-3 rounded-2xl border border-border bg-white p-4">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-soft" />
+          <Input
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            placeholder="Search by dispute id, order id, reason, seller, or buyer"
+            className="h-10 pl-10"
+            aria-label="Search disputes"
+          />
         </div>
-
-        <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Stat label="Buyer" value={order?.buyerName ?? ""} />
-          <Stat label="Seller" value={currentSeller.name} />
-          <Stat label="Time elapsed" value={formatRelative(dispute.openedAt)} />
-          <Stat label="Status" value={dispute.status} />
-        </div>
-      </div>
-
-      {/* Return-flow widget (only when this dispute is a return) */}
-      {dispute.isReturn && (
-        <ReturnFlow evidence={dispute.returnEvidence} viewer="admin" />
-      )}
-
-      {/* Split evidence */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <EvidencePanel
-          side="buyer"
-          name={order?.buyerName ?? ""}
-          summary={dispute.summary}
-          imageCount={dispute.buyerEvidence}
-          seed={`b-${dispute.id}`}
-        />
-        <EvidencePanel
-          side="seller"
-          name={currentSeller.name}
-          summary="Item was shipped with photo proof. Buyer's claim does not match our packaging logs."
-          imageCount={dispute.sellerEvidence}
-          seed={`s-${dispute.id}`}
-        />
-      </div>
-
-      {/* Timeline + chat history */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-border bg-white p-5">
-          <h2 className="text-sm font-semibold text-ink">Order timeline</h2>
-          {order && (
-            <Timeline
-              className="mt-4"
-              steps={[
-                { key: "p", title: "Order placed", at: formatTime(order.createdAt), state: "done" },
-                { key: "e", title: "Payment locked", at: formatTime(order.updatedAt), state: "done" },
-                {
-                  key: "s",
-                  title: "Shipped",
-                  description: order.trackingNumber
-                    ? `${order.carrier} ${order.trackingNumber}`
-                    : undefined,
-                  at: order.shippedAt && formatTime(order.shippedAt),
-                  state: order.shippedAt ? "done" : "pending",
-                },
-                {
-                  key: "d",
-                  title: "Delivered",
-                  at: order.deliveredAt && formatTime(order.deliveredAt),
-                  state: order.deliveredAt ? "done" : "pending",
-                },
-                { key: "dsp", title: "Dispute opened", at: formatRelative(dispute.openedAt), state: "alert" },
-                { key: "med", title: "Awaiting your decision", state: "active" },
-              ]}
-            />
-          )}
-        </div>
-
-        <div className="rounded-2xl border border-border bg-white p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="inline-flex items-center gap-1.5 text-sm font-semibold text-ink">
-              <MessageSquare className="h-3.5 w-3.5 text-ink-soft" /> Chat history
-            </h2>
-            <span className="text-[11px] text-ink-soft">{chat.length} messages</span>
-          </div>
-          <ul className="mt-4 max-h-80 space-y-2 overflow-y-auto pr-1">
-            {chat.map((m) => (
-              <li
-                key={m.id}
+        <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {FILTERS.map((f) => {
+            const count = counts[f.key];
+            const isActive = filter === f.key;
+            return (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => onFilterChange(f.key)}
                 className={cn(
-                  "rounded-xl px-3 py-2 text-xs",
-                  m.from === "system" && "border border-border bg-surface-2/30 text-center text-ink-soft",
-                  m.from === "buyer" && "mr-6 bg-secondary text-ink",
-                  m.from === "seller" && "ml-6 bg-brand text-brand-foreground"
+                  "inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-full border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+                  isActive
+                    ? "border-brand-soft bg-brand-soft text-brand-soft-foreground"
+                    : "border-border bg-white text-ink-soft hover:text-ink",
+                  !isActive && count === 0 && "opacity-60",
                 )}
               >
-                <p className="text-[10px] opacity-70">
-                  {m.from === "system" ? "System" : m.from === "buyer" ? "Buyer" : "Seller"} ·{" "}
-                  {formatTime(m.at)}
-                </p>
-                <p className="mt-0.5">{m.text}</p>
-              </li>
-            ))}
-          </ul>
+                {f.label}
+                <span
+                  className={cn(
+                    "ml-1.5 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums",
+                    isActive ? "bg-white/50 text-current" : "bg-surface text-ink-soft",
+                  )}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
         </div>
-      </div>
+      </section>
 
-      {/* Resolved state or controls */}
-      {localResolution ? (
-        <div className="space-y-3">
-          <DisputeResolutionCard resolution={localResolution} viewer="admin" />
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-border bg-white px-4 py-3 text-xs text-ink-soft">
-            <span>Both parties have been notified and can see this outcome on their order pages.</span>
-            <button
-              onClick={() => setLocalResolution(null)}
-              className="font-medium text-brand hover:underline"
-            >
-              Demo: reset & resolve again
-            </button>
+      {/* Queue */}
+      {disputes.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-border bg-white p-10 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-surface text-ink-soft">
+            <CheckCircle2 className="h-6 w-6" aria-hidden />
           </div>
+          <p className="mt-4 text-base font-semibold text-ink">All clear</p>
+          <p className="mx-auto mt-2 max-w-sm text-sm text-ink-soft">
+            {query
+              ? "No disputes match this search."
+              : "No disputes match this filter. Pick another or sit back."}
+          </p>
         </div>
       ) : (
-        <div className="rounded-2xl border border-emerald-200/60 bg-white p-5 shadow-[0_8px_24px_-16px_rgba(15,42,30,0.15)]">
-          <h2 className="text-sm font-semibold text-ink">Resolve this dispute</h2>
-          <p className="mt-1 text-xs text-ink-soft">
-            Your decision is binding. Funds release the moment you confirm.
-          </p>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-3">
-            <Option
-              active={outcome === "release"}
-              onClick={() => setOutcome("release")}
-              icon={CheckCircle2}
-              tone="brand"
-              title="Full release"
-              body={`${formatNGN(dispute.amountNGN)} to seller`}
-            />
-            <Option
-              active={outcome === "refund"}
-              onClick={() => setOutcome("refund")}
-              icon={Undo2}
-              tone="rose"
-              title="Full refund"
-              body={`${formatNGN(dispute.amountNGN)} to buyer`}
-            />
-            <Option
-              active={outcome === "split"}
-              onClick={() => setOutcome("split")}
-              icon={Split}
-              tone="indigo"
-              title="Partial split"
-              body="Custom share"
-            />
+        <>
+          {/* Desktop table */}
+          <div className="hidden overflow-hidden rounded-2xl border border-border bg-white sm:block">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-border bg-surface text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+                <tr>
+                  <th className="px-4 py-3">Dispute</th>
+                  <th className="px-4 py-3">Order / parties</th>
+                  <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-right">Opened</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {disputes.map((d) => (
+                  <DisputeRow key={d.id} dispute={d} onOpen={onOpen} />
+                ))}
+              </tbody>
+            </table>
           </div>
 
-          {outcome === "split" && (
-            <div className="mt-5 rounded-xl border border-border bg-surface-2/30 p-4">
-              <div className="flex items-baseline justify-between text-sm">
-                <span className="font-medium text-ink">Buyer refund</span>
-                <span className="font-semibold tabular-nums text-ink">
-                  {formatNGN(Math.round((dispute.amountNGN * splitPct) / 100))}
-                </span>
-              </div>
-              <Slider
-                value={[splitPct]}
-                max={100}
-                step={5}
-                onValueChange={([v]) => setSplitPct(v)}
-                className="mt-3"
-              />
-              <div className="mt-2 flex items-baseline justify-between text-xs text-ink-soft">
-                <span>{splitPct}% to buyer</span>
-                <span>{100 - splitPct}% to seller</span>
-              </div>
-              <div className="mt-3 flex items-baseline justify-between text-sm">
-                <span className="font-medium text-ink">Seller release</span>
-                <span className="font-semibold tabular-nums text-ink">
-                  {formatNGN(Math.round((dispute.amountNGN * (100 - splitPct)) / 100))}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Mediator reasoning */}
-          <div className="mt-5">
-            <label htmlFor="reasoning" className="text-xs font-medium text-ink">
-              Reasoning (shown to both parties)
-            </label>
-            <Textarea
-              id="reasoning"
-              value={reasoning}
-              onChange={(e) => setReasoning(e.target.value)}
-              placeholder="Briefly explain how you weighed the evidence."
-              className="mt-1.5 min-h-[80px]"
-            />
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-3">
-            <Button variant="outline" className="flex-1">
-              <Layers className="mr-1 h-4 w-4" /> Request more evidence
-            </Button>
-            <Button
-              onClick={submitResolution}
-              className="flex-[2] bg-brand text-brand-foreground hover:bg-brand/90"
-            >
-              Confirm resolution <ArrowRight className="ml-1 h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+          {/* Mobile cards */}
+          <ul className="space-y-3 sm:hidden">
+            {disputes.map((d) => (
+              <DisputeMobileCard key={d.id} dispute={d} onOpen={onOpen} />
+            ))}
+          </ul>
+        </>
       )}
-    </div>
+    </>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-surface-2/30 px-3 py-2">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-ink-soft">
-        {label}
-      </p>
-      <p className="mt-0.5 truncate text-sm font-medium capitalize text-ink">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function EvidencePanel({
-  side,
-  name,
-  summary,
-  imageCount,
-  seed,
+function DisputeRow({
+  dispute,
+  onOpen,
 }: {
-  side: "buyer" | "seller";
-  name: string;
-  summary: string;
-  imageCount: number;
-  seed: string;
+  dispute: DisputeFixture;
+  onOpen: (id: string) => void;
 }) {
-  const tone =
-    side === "buyer"
-      ? "border-rose-200/70 bg-rose-50/30"
-      : "border-emerald-200/60 bg-brand-soft/40";
   return (
-    <div className={cn("rounded-2xl border bg-white p-5", tone)}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Avatar seed={`${side}-${name}`} name={name} size={32} />
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wider text-ink-soft">
-              {side}
+    <tr
+      onClick={() => onOpen(dispute.id)}
+      className="cursor-pointer transition-colors hover:bg-surface focus-within:bg-surface"
+    >
+      <td className="px-4 py-3 align-middle">
+        <p className="font-mono text-sm font-semibold tabular-nums text-ink">
+          {dispute.shortId}
+        </p>
+        <p className="mt-0.5 line-clamp-1 text-xs text-ink-soft">
+          {dispute.reason}
+        </p>
+      </td>
+      <td className="px-4 py-3 align-middle">
+        <p className="text-sm text-ink">
+          {dispute.buyer.name}{" "}
+          <span className="text-ink-soft">vs.</span> @{dispute.seller.handle}
+        </p>
+        <p className="mt-0.5 font-mono text-[11px] tabular-nums text-ink-soft">
+          {dispute.orderShortId}
+        </p>
+      </td>
+      <td className="px-4 py-3 align-middle">
+        <p className="text-sm font-semibold tabular-nums text-ink">
+          {formatNGN(dispute.amountNGN)}
+        </p>
+        <p className="mt-0.5 text-[11px] tabular-nums text-ink-soft">
+          {dispute.amountSats.toLocaleString()} sats
+        </p>
+      </td>
+      <td className="px-4 py-3 align-middle">
+        <div className="flex flex-col items-start gap-1">
+          <StatusBadge status={dispute.status} />
+          <PriorityBadge priority={dispute.priority} />
+        </div>
+      </td>
+      <td className="px-4 py-3 align-middle text-right">
+        <p className="text-xs text-ink-soft">
+          {formatRelative(dispute.openedAt)}
+        </p>
+      </td>
+    </tr>
+  );
+}
+
+function DisputeMobileCard({
+  dispute,
+  onOpen,
+}: {
+  dispute: DisputeFixture;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={() => onOpen(dispute.id)}
+        className="block w-full rounded-2xl border border-border bg-white p-4 text-left transition-colors active:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="font-mono text-sm font-semibold tabular-nums text-ink">
+              {dispute.shortId}
             </p>
-            <p className="text-sm font-semibold text-ink">{name}</p>
+            <p className="mt-0.5 line-clamp-2 text-xs text-ink-soft">
+              {dispute.reason}
+            </p>
+          </div>
+          <StatusBadge status={dispute.status} />
+        </div>
+        <div className="mt-3 flex items-baseline justify-between gap-3 border-t border-border pt-3">
+          <div className="min-w-0">
+            <p className="truncate text-xs text-ink">
+              {dispute.buyer.name} vs. @{dispute.seller.handle}
+            </p>
+            <p className="mt-0.5 font-mono text-[11px] tabular-nums text-ink-soft">
+              {dispute.orderShortId}
+            </p>
+          </div>
+          <div className="shrink-0 text-right">
+            <p className="text-sm font-semibold tabular-nums text-ink">
+              {formatNGN(dispute.amountNGN)}
+            </p>
+            <p className="mt-0.5 text-[11px] text-ink-soft">
+              {formatRelative(dispute.openedAt)}
+            </p>
           </div>
         </div>
-        <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-medium text-ink-soft">
-          {imageCount} files
-        </span>
-      </div>
-      <p className="mt-3 text-sm leading-relaxed text-ink">"{summary}"</p>
-      <div className="mt-3 grid grid-cols-3 gap-2">
-        {Array.from({ length: Math.max(1, imageCount) }).map((_, i) => (
-          <ProductImage
-            key={i}
-            image={{
-              seed: `${seed}-${i}`,
-              hueA: side === "buyer" ? 0 : 150,
-              hueB: side === "buyer" ? 20 : 170,
-              label: side,
-            }}
-            className="aspect-square"
-            rounded="rounded-md"
-          />
-        ))}
-      </div>
-    </div>
+      </button>
+    </li>
   );
 }
 
-function Option({
-  icon: Icon,
-  title,
-  body,
-  active,
-  onClick,
-  tone,
+/* ----------------------------------------------------------------------- */
+/*                            Detail view                                  */
+/* ----------------------------------------------------------------------- */
+
+function DisputeDetail({
+  dispute,
+  onBack,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  body: string;
-  active: boolean;
-  onClick: () => void;
-  tone: "brand" | "rose" | "indigo";
+  dispute: DisputeFixture;
+  onBack: () => void;
+}) {
+  const { toast } = useToast();
+  const [outcome, setOutcome] = useState<DisputeOutcome | null>(null);
+  const [splitPct, setSplitPct] = useState<number>(50);
+  const [rationale, setRationale] = useState("");
+
+  const canResolve = outcome !== null && rationale.trim().length >= 20;
+
+  const onResolve = () => {
+    toast({
+      title: "Resolution staged",
+      description:
+        "Real publishing of kind 33889 lands when backend admin endpoints ship. For now the workflow is verified end-to-end.",
+    });
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onBack}
+        className="inline-flex items-center gap-1 rounded text-xs font-medium text-ink-soft hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+      >
+        <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to queue
+      </button>
+
+      {/* Heading */}
+      <header className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="font-mono text-2xl font-semibold tabular-nums text-ink">
+            {dispute.shortId}
+          </h1>
+          <p className="mt-1 text-sm text-ink-soft">
+            {dispute.reason} ·{" "}
+            <span className="font-mono tabular-nums">
+              {dispute.orderShortId}
+            </span>
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <StatusBadge status={dispute.status} />
+          <PriorityBadge priority={dispute.priority} />
+        </div>
+      </header>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* LEFT — both sides + resolution */}
+        <div className="space-y-6 lg:col-span-2">
+          {/* Both parties side-by-side */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <PartyCard
+              role="Buyer"
+              name={dispute.buyer.name}
+              location={dispute.buyer.city}
+              evidence={dispute.evidence.buyer}
+              opened={dispute.openedBy === "buyer"}
+            />
+            <PartyCard
+              role="Seller"
+              name={`@${dispute.seller.handle}`}
+              subname={dispute.seller.name}
+              location={dispute.seller.location}
+              evidence={dispute.evidence.seller}
+              opened={dispute.openedBy === "seller"}
+            />
+          </div>
+
+          {/* Resolution form */}
+          <section className="rounded-2xl border border-border bg-white p-5 sm:p-6">
+            <h2 className="text-base font-semibold text-ink">
+              Sign a resolution
+            </h2>
+            <p className="mt-1 text-sm text-ink-soft">
+              The resolution publishes as a Nostr kind 33889 event signed
+              by the mediator key. Both parties and any third party can
+              verify it without trusting SafeSale.
+            </p>
+
+            <div className="mt-5 space-y-4">
+              <fieldset>
+                <legend className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+                  Outcome
+                </legend>
+                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <OutcomeOption
+                    value="refund_buyer"
+                    label="Refund to buyer"
+                    selected={outcome === "refund_buyer"}
+                    onSelect={() => setOutcome("refund_buyer")}
+                  />
+                  <OutcomeOption
+                    value="release_seller"
+                    label="Release to seller"
+                    selected={outcome === "release_seller"}
+                    onSelect={() => setOutcome("release_seller")}
+                  />
+                  <OutcomeOption
+                    value="split"
+                    label="Split"
+                    selected={outcome === "split"}
+                    onSelect={() => setOutcome("split")}
+                  />
+                </div>
+              </fieldset>
+
+              {outcome === "split" && (
+                <div>
+                  <Label htmlFor="split">Buyer share (%)</Label>
+                  <div className="mt-1.5 flex items-center gap-3">
+                    <input
+                      id="split"
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={splitPct}
+                      onChange={(e) => setSplitPct(Number(e.target.value))}
+                      className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-surface"
+                    />
+                    <span className="font-mono text-sm font-semibold tabular-nums text-ink">
+                      {splitPct}%
+                    </span>
+                  </div>
+                  <p className="mt-2 text-[11px] text-ink-soft">
+                    Buyer receives {formatNGN(Math.round((dispute.amountNGN * splitPct) / 100))} ·
+                    seller receives {formatNGN(dispute.amountNGN - Math.round((dispute.amountNGN * splitPct) / 100))}
+                  </p>
+                </div>
+              )}
+
+              <div>
+                <Label htmlFor="rationale">
+                  Rationale <span className="text-ink-soft">(min 20 chars; published publicly)</span>
+                </Label>
+                <Textarea
+                  id="rationale"
+                  value={rationale}
+                  onChange={(e) => setRationale(e.target.value)}
+                  placeholder="Why this outcome — phrased so both parties can read it without escalating."
+                  className="mt-1.5 min-h-[100px]"
+                />
+                <p className="mt-1 text-[11px] text-ink-soft">
+                  {rationale.length} / 600
+                </p>
+              </div>
+
+              <Button
+                type="button"
+                onClick={onResolve}
+                disabled={!canResolve}
+                className="h-11 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground hover:bg-brand/90 disabled:opacity-50"
+              >
+                <Gavel className="mr-2 h-4 w-4" aria-hidden />
+                Sign &amp; publish resolution
+              </Button>
+            </div>
+          </section>
+        </div>
+
+        {/* RIGHT — case details + summary */}
+        <div className="space-y-6">
+          <section className="rounded-2xl border border-border bg-white p-5 sm:p-6">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+              Case
+            </p>
+            <dl className="mt-4 space-y-3 text-sm">
+              <Pair label="Listing">
+                <span className="text-ink">{dispute.listing.title}</span>
+              </Pair>
+              <Pair label="Disputed amount">
+                <div>
+                  <p className="font-semibold tabular-nums text-ink">
+                    {formatNGN(dispute.amountNGN)}
+                  </p>
+                  <p className="mt-0.5 text-[11px] tabular-nums text-ink-soft">
+                    {dispute.amountSats.toLocaleString()} sats locked in Cashu
+                  </p>
+                </div>
+              </Pair>
+              <Pair label="Opened by">
+                <span className="capitalize text-ink">{dispute.openedBy}</span>
+              </Pair>
+              <Pair label="Opened">
+                <span className="text-ink">{formatRelative(dispute.openedAt)}</span>
+              </Pair>
+              <Pair label="Evidence due">
+                <span className="inline-flex items-center gap-1 text-ink">
+                  <Calendar className="h-3.5 w-3.5 text-ink-soft" aria-hidden />
+                  {formatRelative(dispute.evidenceDueAt)}
+                </span>
+              </Pair>
+            </dl>
+          </section>
+
+          <section className="rounded-2xl border border-border bg-white p-5 sm:p-6">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+              Summary
+            </p>
+            <p className="mt-3 text-sm leading-relaxed text-ink">
+              {dispute.summary}
+            </p>
+          </section>
+
+          <p className="text-[11px] italic text-ink-soft">
+            All evidence + your signed resolution publish as Nostr events.
+            Anyone — including non-SafeSale clients — can verify the
+            mediator's decision against the public mediator pubkey.
+          </p>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/* ----------------------------------------------------------------------- */
+/*                          Small primitives                               */
+/* ----------------------------------------------------------------------- */
+
+function StatusBadge({ status }: { status: DisputeQueueStatus }) {
+  const cfg =
+    status === "escalated"
+      ? { label: "Escalated", cls: "bg-rose-50 text-rose-800 border-rose-200", Icon: AlertTriangle }
+      : status === "evidence_requested"
+        ? { label: "Awaiting evidence", cls: "bg-amber-50 text-amber-800 border-amber-200", Icon: Package }
+        : { label: "Mediating", cls: "bg-sky-50 text-sky-800 border-sky-200", Icon: Gavel };
+  const Icon = cfg.Icon;
+  return (
+    <span
+      className={cn(
+        "inline-flex h-6 items-center gap-1.5 rounded-md border px-2 text-[11px] font-semibold uppercase tracking-wide",
+        cfg.cls,
+      )}
+    >
+      <Icon className="h-3 w-3" aria-hidden /> {cfg.label}
+    </span>
+  );
+}
+
+function PriorityBadge({ priority }: { priority: DisputePriority }) {
+  const cls =
+    priority === "high"
+      ? "bg-rose-100 text-rose-800"
+      : priority === "medium"
+        ? "bg-amber-100 text-amber-800"
+        : "bg-surface text-ink-soft";
+  return (
+    <span
+      className={cn(
+        "inline-block rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+        cls,
+      )}
+    >
+      priority: {priority}
+    </span>
+  );
+}
+
+function PartyCard({
+  role,
+  name,
+  subname,
+  location,
+  evidence,
+  opened,
+}: {
+  role: "Buyer" | "Seller";
+  name: string;
+  subname?: string;
+  location: string;
+  evidence: string[];
+  opened: boolean;
+}) {
+  return (
+    <section className="rounded-2xl border border-border bg-white p-5">
+      <header className="flex items-center justify-between gap-2">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-ink-soft">
+          {role}
+        </p>
+        {opened && (
+          <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-rose-800">
+            Opened
+          </span>
+        )}
+      </header>
+      <div className="mt-3 flex items-center gap-3">
+        <Avatar seed={`${role}-${name}`} name={name} size={36} />
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-ink">{name}</p>
+          <p className="truncate text-xs text-ink-soft">
+            {subname ? `${subname} · ` : ""}
+            {location}
+          </p>
+        </div>
+      </div>
+      <ul className="mt-4 space-y-2">
+        {evidence.map((e, i) => (
+          <li
+            key={i}
+            className="flex items-start gap-2 rounded-lg border border-border bg-surface/40 p-3 text-xs text-ink"
+          >
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ink-soft" aria-hidden />
+            <span>{e}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function OutcomeOption({
+  value,
+  label,
+  selected,
+  onSelect,
+}: {
+  value: DisputeOutcome;
+  label: string;
+  selected: boolean;
+  onSelect: () => void;
 }) {
   return (
     <button
-      onClick={onClick}
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      data-value={value}
       className={cn(
-        "rounded-xl border p-4 text-left transition-all",
-        active
-          ? tone === "brand"
-            ? "border-brand bg-brand-soft text-ink"
-            : tone === "rose"
-              ? "border-rose-300 bg-rose-50 text-ink"
-              : "border-indigo-300 bg-indigo-50 text-ink"
-          : "border-border bg-white text-ink-soft hover:border-ink/30"
+        "rounded-lg border px-3 py-3 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand",
+        selected
+          ? "border-brand bg-brand-soft text-brand-soft-foreground"
+          : "border-border bg-white text-ink hover:bg-surface",
       )}
     >
-      <Icon
-        className={cn(
-          "h-5 w-5",
-          tone === "brand" && "text-brand",
-          tone === "rose" && "text-rose-600",
-          tone === "indigo" && "text-indigo-600"
-        )}
-      />
-      <p className="mt-2 text-sm font-semibold text-ink">{title}</p>
-      <p className="text-[11px]">{body}</p>
+      {label}
     </button>
   );
 }
 
-
+function Pair({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 border-b border-border pb-2 last:border-0">
+      <dt className="text-[11px] uppercase tracking-wider text-ink-soft">
+        {label}
+      </dt>
+      <dd className="text-right">{children}</dd>
+    </div>
+  );
+}
