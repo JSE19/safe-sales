@@ -1,6 +1,6 @@
 import { useSeoMeta } from "@unhead/react";
-import { Link, useNavigate } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { useState } from "react";
 import { MarketingLayout } from "@/components/safesale/MarketingLayout";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/safesale/Avatar";
@@ -29,26 +29,21 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useCurrentSeller } from "@/hooks/useCurrentSeller";
 
 /**
- * Marketing front door. Two responsibilities:
+ * Marketing front door. Renders for everyone — signed in or not.
  *
- *   1. Tell new visitors what SafeSale is and route them into
- *      `/onboarding`. The preview blocks on this page are intentionally
- *      stylized as labelled examples — they don't claim to be real
- *      sellers / real listings, so we never have to keep a fixture in
- *      sync with the live database.
+ * Earlier this page auto-redirected signed-in users to `/app` via a
+ * `useEffect(navigate)`. That was wrong: it stopped logged-in users
+ * from ever seeing Landing again, even when they navigated to `/`
+ * deliberately (to share the URL, re-read the marketing copy, etc.).
  *
- *   2. Bounce already-signed-in users straight to their dashboard.
- *      Otherwise tapping "Start selling" from a logged-in browser tab
- *      just bounces the user back to the same Landing page, which is
- *      both confusing and a real bug we shipped before. Routing rule:
+ * The right behaviour: Landing always renders; the CTA buttons are
+ * session-aware (`useCallToAction()` below). A logged-out visitor
+ * clicking "Start selling safely" lands on `/onboarding`; a
+ * signed-in seller clicking the same button lands on `/app`.
  *
- *        - logged in + has SafeSale seller profile  → /app
- *        - logged in + no seller profile yet         → /onboarding
- *        - logged out                                 → stay on Landing
- *
- *      `useCurrentUser` reads from Nostrify; `useCurrentSeller` reads
- *      the SafeSale-specific record from localStorage that Onboarding
- *      stores after POST /api/sellers.
+ * The preview blocks (HeroMockup + SellerReputation) are stylized
+ * examples — labelled with visible "Example" badges — so we never
+ * have to keep a fixture in sync with the live database.
  */
 export default function Landing() {
   useSeoMeta({
@@ -56,15 +51,6 @@ export default function Landing() {
     description:
       "SafeSale is escrow for social commerce. Buyers send money, sellers ship, and SafeSale holds the funds until everyone is happy. Works wherever you can paste a link.",
   });
-
-  const { user } = useCurrentUser();
-  const [seller] = useCurrentSeller();
-  const navigate = useNavigate();
-
-  useEffect(() => {
-    if (!user) return;
-    navigate(seller ? "/app" : "/onboarding", { replace: true });
-  }, [user, seller, navigate]);
 
   return (
     <MarketingLayout>
@@ -79,6 +65,25 @@ export default function Landing() {
       <FinalCTA />
     </MarketingLayout>
   );
+}
+
+/**
+ * Where the "Start selling" CTAs route, based on the current session:
+ *
+ *   - logged out                  → /onboarding  (sign up flow)
+ *   - logged in + has seller      → /app         (skip the wizard)
+ *   - logged in + no seller yet   → /onboarding  (finish signup)
+ *
+ * Returned as a `{ to, label }` pair so the same logic backs all CTAs
+ * on the page and we never duplicate it.
+ */
+function useCallToAction(): { to: string; label: string } {
+  const { user } = useCurrentUser();
+  const [seller] = useCurrentSeller();
+
+  if (!user) return { to: "/onboarding", label: "Start selling safely" };
+  if (seller) return { to: "/app", label: "Go to your dashboard" };
+  return { to: "/onboarding", label: "Finish setting up" };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -128,6 +133,7 @@ const EXAMPLE_REVIEWS = [
 /* -------------------------------------------------------------------------- */
 
 function Hero() {
+  const cta = useCallToAction();
   return (
     <section className="relative overflow-hidden">
       <div
@@ -163,8 +169,8 @@ function Hero() {
               size="lg"
               className="h-12 rounded-lg bg-brand px-6 text-base font-semibold text-brand-foreground shadow-[0_8px_24px_-8px_color-mix(in_oklab,var(--brand)_70%,transparent)] hover:bg-brand/90"
             >
-              <Link to="/onboarding">
-                Start selling safely <ArrowRight className="ml-1 h-4 w-4" />
+              <Link to={cta.to}>
+                {cta.label} <ArrowRight className="ml-1 h-4 w-4" />
               </Link>
             </Button>
             <Button
@@ -805,6 +811,7 @@ function FAQ() {
 /* -------------------------------------------------------------------------- */
 
 function FinalCTA() {
+  const cta = useCallToAction();
   return (
     <section className="container py-20">
       <div className="relative overflow-hidden rounded-3xl border border-emerald-200/60 bg-gradient-to-br from-brand to-emerald-700 p-10 text-center text-white shadow-[0_30px_80px_-30px_rgba(15,42,30,0.4)] sm:p-14">
@@ -824,8 +831,8 @@ function FinalCTA() {
             size="lg"
             className="h-12 rounded-lg bg-white px-6 text-base font-semibold text-brand hover:bg-emerald-50"
           >
-            <Link to="/onboarding">
-              Create my SafeSale <ArrowRight className="ml-1 h-4 w-4" />
+            <Link to={cta.to}>
+              {cta.label === "Start selling safely" ? "Create my SafeSale" : cta.label} <ArrowRight className="ml-1 h-4 w-4" />
             </Link>
           </Button>
           <Button
