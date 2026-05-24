@@ -67,6 +67,7 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v && v.length > 0 ? v : 'SafeSale <onboarding@resend.dev>')),
+  RESEND_TEST_TO_EMAIL: z.string().email().optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

@@ -39,6 +39,25 @@ function buildOrderLink(orderToken: string): string {
   return `${env.FRONTEND_APP_URL}/order/${encodeURIComponent(orderToken)}`;
 }
 
+function usesResendTestSender(): boolean {
+  return /@resend\.dev\b/i.test(env.RESEND_FROM_EMAIL);
+}
+
+function resolveRecipient(order: BuyerOrderEmailInput['order']): string | null {
+  if (env.NODE_ENV !== 'production' && usesResendTestSender()) {
+    if (!env.RESEND_TEST_TO_EMAIL) {
+      logger.warn(
+        { orderId: order.id },
+        'RESEND_TEST_TO_EMAIL missing; resend.dev can only email the verified Resend account',
+      );
+      return null;
+    }
+    return env.RESEND_TEST_TO_EMAIL;
+  }
+
+  return order.buyerEmail;
+}
+
 /**
  * Best-effort buyer email. Escrow state must never depend on email delivery:
  * the order link is still shown in the UI and can be copied manually.
@@ -49,6 +68,12 @@ export async function sendBuyerOrderLinkEmail({
 }: BuyerOrderEmailInput): Promise<void> {
   if (!order.buyerEmail) {
     logger.warn({ orderId: order.id }, 'Buyer email missing; order link email skipped');
+    return;
+  }
+
+  const recipient = resolveRecipient(order);
+  if (!recipient) {
+    logger.warn({ orderId: order.id }, 'Order link email skipped; no valid Resend recipient');
     return;
   }
 
@@ -93,7 +118,7 @@ export async function sendBuyerOrderLinkEmail({
       },
       body: JSON.stringify({
         from: env.RESEND_FROM_EMAIL,
-        to: [order.buyerEmail],
+        to: [recipient],
         subject,
         html,
       }),
@@ -115,5 +140,13 @@ export async function sendBuyerOrderLinkEmail({
     return;
   }
 
-  logger.info({ orderId: order.id, buyerEmail: order.buyerEmail }, 'Buyer order link email sent');
+  logger.info(
+    {
+      orderId: order.id,
+      buyerEmail: order.buyerEmail,
+      recipient,
+      redirectedForResendTest: recipient !== order.buyerEmail,
+    },
+    'Buyer order link email sent',
+  );
 }
