@@ -21,6 +21,11 @@ const EnvSchema = z.object({
     .string()
     .default('http://localhost:8080')
     .transform((s) => s.split(',').map((o) => o.trim()).filter(Boolean)),
+  FRONTEND_APP_URL: z
+    .string()
+    .default('http://localhost:8080')
+    .transform((v) => v.replace(/\/+$/, ''))
+    .pipe(z.string().url()),
 
   // Database
   DATABASE_URL: z
@@ -55,6 +60,13 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v && v.length > 0 ? v : 'https://sandboxapi.bitnob.co'))
     .pipe(z.string().url()),
+
+  // Email (Resend)
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM_EMAIL: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : 'SafeSale <onboarding@resend.dev>')),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

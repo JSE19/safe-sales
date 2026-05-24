@@ -4,6 +4,7 @@ import { nip19 } from 'nostr-tools';
 import { prisma } from '../db/client.js';
 import { BadRequest, NotFound } from '../lib/errors.js';
 import { generateOrderToken, generateShortId } from '../lib/errors.js';
+import { markOrderPaymentLocked } from './webhooks.js';
 
 const CreateOrderSchema = z.object({
   listingId: z.string().min(1),
@@ -110,6 +111,27 @@ const ordersRoute: FastifyPluginAsync = async (app) => {
       dispute: order.dispute,
     };
   });
+
+  // POST /api/orders/:token/confirm-payment - MVP instant approval.
+  // This replaces Bitnob virtual-account verification until production
+  // payment rails can confirm bank transfers automatically.
+  app.post<{ Params: { token: string } }>(
+    '/api/orders/:token/confirm-payment',
+    async (request) => {
+      const order = await prisma.order.findUnique({
+        where: { orderToken: request.params.token },
+      });
+      if (!order) throw new NotFound('Order not found - check your link');
+
+      const updated = await markOrderPaymentLocked(order.orderToken, order.amountNGN);
+
+      return {
+        ok: true,
+        orderId: updated.id,
+        status: updated.status,
+      };
+    },
+  );
 
   // GET /api/orders/seller/:npub — seller dashboard order list
   app.get<{ Params: { npub: string } }>('/api/orders/seller/:npub', async (request) => {

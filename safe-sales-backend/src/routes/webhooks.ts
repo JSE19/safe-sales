@@ -4,6 +4,7 @@ import { prisma } from '../db/client.js';
 import { BadRequest, NotFound, Conflict } from '../lib/errors.js';
 import { mintLockedToken } from '../services/cashu.js';
 import { sendBrandDM } from '../services/nostr.js';
+import { sendBuyerOrderLinkEmail } from '../services/email.js';
 import { logger } from '../lib/logger.js';
 
 /**
@@ -113,6 +114,11 @@ export async function markOrderPaymentLocked(
       'Nostr DM to seller failed (non-fatal)',
     );
   }
+
+  await sendBuyerOrderLinkEmail({
+    order: updated,
+    listing: order.listing,
+  });
 
   return updated;
 }
