@@ -57,9 +57,9 @@ The simplest sync (recommended): after pushing today's commits to `frontend`, ru
 
 **Day 2 — screens #5 + #9 ported (with mocks where backend missing)**
 
-- [ ] **Port screen #5 (Earnings)** — read `useSellerOrders`, sum sats across `completed` orders for the monthly total; list completed orders as payout history. "Cash out to Naira" = honest "coming soon" toast. Flip to ✅ with note "wired to seller-orders aggregation; awaiting `/api/earnings` for real payout history."
-- [ ] **Port screen #9 (Admin Dispute Dashboard)** — static fixture of 3–4 example disputes, "Resolve" action toasts. Flip to ✅ with note "static demo surface; awaiting backend admin endpoints."
-- [ ] **All 9 screens design-complete by Day 2 evening.**
+- [x] **Port screen #5 (Earnings)** — read `useSellerOrders`, sum sats across `completed` orders for the monthly total; list completed orders as payout history. "Cash out to Naira" = honest "coming soon" toast. Flip to ✅ with note "wired to seller-orders aggregation; awaiting `/api/earnings` for real payout history."
+- [x] **Port screen #9 (Admin Dispute Dashboard)** — static fixture of 3–4 example disputes, "Resolve" action toasts. Flip to ✅ with note "static demo surface; awaiting backend admin endpoints."
+- [x] **All 9 screens design-complete by Day 2 evening.**
 
 **Day 3 — polish, deploy, dry-run**
 
