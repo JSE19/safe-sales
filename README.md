@@ -180,10 +180,31 @@ To run both the frontend and backend services on your machine:
 ## 👩‍💻 The SafeSale Team
 
 * **Joy** — Backend Architecture, Cashu eCash primitives, and Nostr DM dispatching
-* **Mutmahinat** — Frontend Engineering, UI/UX Design, Nostrify Integration, and State Wiring
+* **Feyisara** — Frontend Engineering, UI/UX Design, Nostrify Integration, and State Wiring
 
 ---
 
-## 📄 License
+## 🤝 Open Source Contributions & Post-Hackathon Roadmap
 
-This project is licensed under the MIT License.
+SafeSale is built to be a public good. Following the Hack4Freedom submission, we are transitionining SafeSale into a **fully open-source contribution project** to help micro-sellers across the Global South trade safely and sovereignly.
+
+We welcome developers, designers, and security researchers to join us in building the future of zero-trust social commerce!
+
+### 🗺️ Post-Hackathon Roadmap & Contribution Areas
+
+1. **Lightning Network Integration (Phase 9):** Replace testnet Cashu settlements with real-money mainnet Cashu mints and settle payouts to sellers via custom Lightning (LNURL-pay) endpoints.
+2. **Robust NIP-98 Authentication:** Refactor backend endpoints with full Nostr signature request verification to block direct object reference (IDOR) vectors.
+3. **Decentralized Reputation Systems:** Wire NIP-32 review events to listings and seller storefronts for decentralized trust scores.
+4. **NIP-17 Encrypted Dispute Chat:** Build secure, end-to-end encrypted direct messaging between buyers, sellers, and mediators.
+5. **Mobile Native Clients:** Wrap the React application into a responsive progressive web app (PWA) and native mobile shells for low-bandwidth environments.
+
+### 💡 How to Contribute
+* Review our open issues or check the [`CONTRIBUTING.md`](./safesale-frontend/CONTRIBUTING.md) inside the frontend folder.
+* Fork the repository, create a branch (`feature/your-feature`), and open a Pull Request.
+* Share your thoughts on Nostr by tagging the creators!
+
+---
+
+## 📄 License & Open-Source Dedication
+
+This project is currently submitted for **Hack4Freedom 2026**. Following the hackathon, the repository and its entire codebase are dedicated to the public open-source community under the **MIT License**. It will serve as a censorship-resistant, zero-custody framework for decentralized commerce across the Global South.
