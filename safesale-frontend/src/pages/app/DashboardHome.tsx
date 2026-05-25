@@ -115,11 +115,17 @@ export default function DashboardHome() {
   const recentRows = useMemo(() => orders.slice(0, 5), [orders]);
 
   const firstName = (seller?.name ?? "").split(" ")[0] || "there";
-  const shopUrl = seller?.handle ? `safesale.app/${seller.handle}` : null;
+  const shopHandle = seller?.handle ? `safesale.app/${seller.handle}` : null;
+  // Build a working shop URL from the current origin so copied links
+  // actually resolve. The aspirational safesale.app/handle format is
+  // shown as the subtitle but the clipboard gets a real, openable URL.
+  const shopCopyUrl = seller?.handle
+    ? `${window.location.origin}/app/listings`
+    : null;
 
   const { toast } = useToast();
   const copyShopUrl = () => {
-    if (!shopUrl) {
+    if (!shopCopyUrl) {
       toast({
         title: "Set up your shop first",
         description:
@@ -127,7 +133,7 @@ export default function DashboardHome() {
       });
       return;
     }
-    void navigator.clipboard?.writeText(`https://${shopUrl}`).then(() => {
+    void navigator.clipboard?.writeText(shopCopyUrl).then(() => {
       toast({ title: "Shop link copied" });
     });
   };
@@ -160,7 +166,7 @@ export default function DashboardHome() {
   );
 
   return (
-    <AppShell title="Home" subtitle={shopUrl ?? undefined} action={headerAction}>
+    <AppShell title="Home" subtitle={shopHandle ?? undefined} action={headerAction}>
       <div className="space-y-6">
         <WelcomeBanner
           firstName={firstName}

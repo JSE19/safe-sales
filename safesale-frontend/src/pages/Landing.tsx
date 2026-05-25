@@ -209,91 +209,39 @@ function Hero() {
 function HeroMockup() {
   return (
     <div className="relative mx-auto max-w-md">
-      {/* Phone frame */}
-      <div className="relative mx-auto w-full overflow-hidden rounded-[36px] border border-border bg-white shadow-[0_30px_80px_-30px_rgba(15,42,30,0.25)]">
-        <div className="bg-surface p-3">
-          <div className="overflow-hidden rounded-[28px] border border-border/70 bg-white">
-            {/* status bar */}
-            <div className="flex items-center justify-between px-5 py-2 text-[10px] font-medium text-ink-soft">
-              <span>9:41</span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-ink-soft" />
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-ink-soft" />
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-ink-soft" />
-              </span>
-            </div>
-            {/* listing preview */}
-            <div className="relative px-4 pb-5">
-              <span className="absolute right-6 top-1 z-10 inline-flex items-center rounded-full bg-ink/85 px-2 py-0.5 text-[10px] font-medium text-white">
-                Example
-              </span>
-              <ProductImage
-                image={{
-                  seed: EXAMPLE_LISTING.imageSeed,
-                  hueA: 162,
-                  hueB: 200,
-                  label: EXAMPLE_LISTING.title,
-                }}
-                className="aspect-[5/4]"
-                rounded="rounded-2xl"
-              />
-              <div className="mt-4 flex items-center gap-2">
-                <Avatar
-                  seed={EXAMPLE_SELLER.avatarSeed}
-                  name={EXAMPLE_SELLER.name}
-                  size={28}
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13px] font-medium text-ink">
-                    {EXAMPLE_SELLER.name}
-                  </p>
-                  <div className="flex items-center gap-1 text-[11px] text-ink-soft">
-                    <StarRating rating={EXAMPLE_SELLER.rating} size={11} />
-                    <span>· {EXAMPLE_SELLER.reviewCount} reviews</span>
-                  </div>
-                </div>
-                <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[10px] font-medium text-brand-soft-foreground">
-                  <ShieldCheck className="h-3 w-3" /> Verified
-                </span>
-              </div>
-              <h3 className="mt-3 text-[15px] font-semibold leading-snug text-ink">
-                {EXAMPLE_LISTING.title}
-              </h3>
-              <p className="mt-1 text-lg font-semibold text-ink">
-                {formatNGN(EXAMPLE_LISTING.priceNGN)}
-              </p>
-              <button
-                type="button"
-                disabled
-                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 text-sm font-semibold text-brand-foreground opacity-90"
-                aria-label="Example buy button (not interactive)"
-              >
-                <Lock className="h-4 w-4" />
-                Buy safely with escrow
-              </button>
-              <p className="mt-2 text-center text-[11px] text-ink-soft">
-                Your payment is protected until you confirm delivery
-              </p>
-            </div>
+      <div className="relative mx-auto w-full overflow-hidden rounded-[36px] border border-border bg-white shadow-[0_30px_80px_-30px_rgba(15,42,30,0.25)] flex flex-col">
+        <div className="p-1.5 pb-0 bg-surface">
+          <div className="w-full h-8 flex justify-center items-center">
+            <span className="h-1.5 w-16 bg-slate-200 rounded-full"></span>
           </div>
         </div>
-      </div>
-
-      {/* Floating "payment locked" card */}
-      <div className="absolute -left-4 top-24 hidden w-60 rotate-[-4deg] rounded-2xl border border-emerald-200/70 bg-white p-3 shadow-[0_20px_40px_-20px_rgba(15,42,30,0.25)] sm:block">
-        <div className="flex items-center gap-2">
-          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-brand text-brand-foreground">
-            <ShieldCheck className="h-4 w-4" />
-          </span>
-          <div>
-            <p className="text-[10px] font-medium uppercase tracking-wide text-brand-soft-foreground">
-              Payment locked
-            </p>
-            <p className="text-sm font-semibold text-ink">{formatNGN(28500)}</p>
+        <img
+          src="https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80"
+          alt="E-commerce social product"
+          className="w-full object-cover"
+          style={{ height: '450px' }}
+        />
+        <div className="px-5 py-6 bg-white flex flex-col h-full rounded-b-[36px]">
+          <div className="flex justify-between items-center mb-3">
+             <h3 className="text-[17px] font-semibold leading-snug text-ink">
+                Vintage Sneaker Deals
+             </h3>
+             <span className="text-lg font-semibold text-ink">
+                ₦28,500
+             </span>
           </div>
+          <button
+            type="button"
+            disabled
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 text-sm font-semibold text-brand-foreground opacity-90"
+            aria-label="Example buy button (not interactive)"
+          >
+            <Lock className="h-4 w-4" />
+            Buy safely with escrow
+          </button>
         </div>
       </div>
-
+    
       {/* Floating seller rating card */}
       <div className="absolute -bottom-4 -right-2 hidden w-56 rotate-[5deg] rounded-2xl border border-border bg-white p-3 shadow-[0_20px_40px_-20px_rgba(15,42,30,0.25)] sm:block">
         <div className="flex items-center gap-2">
@@ -304,7 +252,7 @@ function HeroMockup() {
           </div>
         </div>
         <p className="mt-2 line-clamp-2 text-[11px] text-ink-soft">
-          “Sneakers were spotless. First time using escrow — I'd never go back.”
+          "Sneakers were flawless. Great escrow experience!"
         </p>
       </div>
     </div>

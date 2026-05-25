@@ -86,6 +86,8 @@ import {
   X,
 } from "lucide-react";
 
+import { XIcon } from "@/components/safesale/BrandIcons";
+
 import { useCurrentSeller } from "@/hooks/useCurrentSeller";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useMyListings, type MyListing } from "@/hooks/useMyListings";
@@ -728,18 +730,17 @@ function ShareDialog({
 
         <div className="space-y-5 py-2">
           {/* URL row */}
-          <div className="flex items-center gap-2 rounded-xl border border-border bg-surface p-2">
-            <span className="flex-1 truncate px-2 font-mono text-xs text-ink-soft">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-xl border border-border bg-surface p-2">
+            <div className="flex-1 min-w-0 break-all px-2 py-1 font-mono text-xs text-ink-soft select-all">
               {shareLink}
-            </span>
+            </div>
             <Button
               size="sm"
-              variant="ghost"
               onClick={copy}
-              className="h-8 px-2 text-xs font-semibold text-brand"
+              className="h-9 sm:h-8 w-full sm:w-auto px-3 text-xs font-semibold bg-brand text-brand-foreground hover:bg-brand/90 shrink-0"
             >
               <Copy className="mr-1 h-3.5 w-3.5" />
-              Copy
+              Copy Link
             </Button>
           </div>
 
@@ -757,7 +758,7 @@ function ShareDialog({
               }
             />
             <ShareTarget
-              icon={Send}
+              icon={XIcon}
               label="X"
               onClick={() =>
                 window.open(

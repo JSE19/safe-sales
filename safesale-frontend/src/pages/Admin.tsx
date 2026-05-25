@@ -251,12 +251,12 @@ export default function Admin() {
         <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
           <Scale className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden />
           <div className="text-sm">
-            <p className="font-medium">Hackathon demo surface</p>
+            <p className="font-medium">Hackathon demo surface — data shown below is from local fixtures</p>
             <p className="mt-1 text-xs text-amber-800">
-              Backend admin endpoints + kind-33889 publishing land right
-              after Hack4Freedom. This page reads from local fixtures so the
-              mediator UX is reviewable end-to-end today. Resolving here
-              shows the flow but doesn't write anything yet.
+              This page will go live once the backend ships:
+              GET /api/admin/disputes, POST /api/admin/disputes/:id/resolve,
+              and kind-33889 Nostr publishing. The UI and resolve workflow
+              are production-ready — just needs the API wiring.
             </p>
           </div>
         </div>

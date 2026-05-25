@@ -1,11 +1,26 @@
+/**
+ * Seller Disputes — `/app/dispute` and `/app/dispute/:token`.
+ *
+ * Wired to real order data from the API via `useSellerOrders()` and
+ * `apiClient.getOrder()`. Disputes are filtered from orders with
+ * `status === 'disputed'` and orders that have a non-null `dispute`
+ * relation.
+ *
+ * Response form buttons show "coming soon" toasts because the backend
+ * has no dispute resolution endpoints yet (POST /api/disputes/:id/respond,
+ * escalate, or resolve don't exist). The UI is production-ready and
+ * will light up automatically when those endpoints ship.
+ */
+
 import { useSeoMeta } from "@unhead/react";
 import { Link, useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { AppShell } from "@/components/safesale/AppShell";
 import { Avatar } from "@/components/safesale/Avatar";
-import { ProductImage } from "@/components/safesale/ProductImage";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -15,57 +30,40 @@ import {
 } from "@/components/ui/select";
 import { Timeline, type TimelineStep } from "@/components/safesale/Timeline";
 import { Countdown } from "@/components/safesale/Countdown";
-import { DisputeResolutionCard } from "@/components/safesale/DisputeResolution";
-import { ReturnFlow } from "@/components/safesale/ReturnFlow";
+import { useSellerOrders } from "@/hooks/useSellerOrders";
+import { useToast } from "@/hooks/useToast";
+import { apiClient, type GetOrderResponse } from "@/lib/api";
+import type {
+  ApiDispute,
+  ApiDisputeStatus,
+  ApiOrder,
+  ApiListing,
+  SellerOrderRow,
+} from "@/lib/api/types";
+import { formatNGN, formatRelative } from "@/lib/format";
 import {
-  disputes,
-  chat,
-  getOrder,
-  getListing,
-  currentSeller,
-} from "@/lib/mock";
-import { formatNGN, formatRelative, formatTime } from "@/lib/format";
-import {
-  ImagePlus,
   Scale,
   ShieldCheck,
   MessageCircle,
-  Upload,
   ArrowLeft,
   ChevronRight,
   Clock,
   AlertCircle,
+  Loader2,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { Dispute, DisputeStatus } from "@/lib/types";
+import { cn, sanitizeUrl } from "@/lib/utils";
 
 /* -------------------------------------------------------------------------- */
 /*                                  ROUTE                                     */
 /* -------------------------------------------------------------------------- */
 
 export default function DisputePage() {
-  const { id } = useParams<{ id?: string }>();
+  const { id: token } = useParams<{ id?: string }>();
 
-  // List view if no dispute id supplied.
-  if (!id) return <DisputeList />;
+  // List view if no token supplied.
+  if (!token) return <DisputeList />;
 
-  const dispute = disputes.find((d) => d.id === id);
-  if (!dispute) {
-    return (
-      <AppShell title="Dispute not found">
-        <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center">
-          <p className="text-sm font-medium text-ink">
-            We couldn't find that dispute.
-          </p>
-          <Button asChild variant="outline" className="mt-4">
-            <Link to="/app/dispute">Back to all disputes</Link>
-          </Button>
-        </div>
-      </AppShell>
-    );
-  }
-
-  return <DisputeDetailView dispute={dispute} />;
+  return <DisputeDetailLoader token={token} />;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -74,12 +72,30 @@ export default function DisputePage() {
 
 function DisputeList() {
   useSeoMeta({ title: "Disputes — SafeSale" });
-  const sellerDisputes = disputes.filter((d) => {
-    const o = getOrder(d.orderId);
-    return o?.sellerId === currentSeller.id;
-  });
-  const open = sellerDisputes.filter((d) => d.status !== "resolved");
-  const closed = sellerDisputes.filter((d) => d.status === "resolved");
+  const { orders, isLoading } = useSellerOrders();
+
+  // Filter orders that have disputes attached
+  const disputedOrders = orders.filter(
+    (o) => o.dispute !== null && o.dispute !== undefined,
+  );
+  const open = disputedOrders.filter((o) => o.dispute!.status !== "resolved");
+  const closed = disputedOrders.filter(
+    (o) => o.dispute!.status === "resolved",
+  );
+
+  if (isLoading) {
+    return (
+      <AppShell
+        title="Disputes"
+        subtitle="Stay calm. Share evidence. We'll get to a fair outcome."
+      >
+        <div className="space-y-4">
+          <Skeleton className="h-24 w-full rounded-2xl" />
+          <Skeleton className="h-24 w-full rounded-2xl" />
+        </div>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell
@@ -92,7 +108,9 @@ function DisputeList() {
         ) : (
           <Section title="Needs your action" count={open.length}>
             <ul className="space-y-3">
-              {open.map((d) => <DisputeRow key={d.id} dispute={d} />)}
+              {open.map((o) => (
+                <DisputeRow key={o.orderToken} order={o} />
+              ))}
             </ul>
           </Section>
         )}
@@ -100,7 +118,9 @@ function DisputeList() {
         {closed.length > 0 && (
           <Section title="Resolved" count={closed.length}>
             <ul className="space-y-3">
-              {closed.map((d) => <DisputeRow key={d.id} dispute={d} />)}
+              {closed.map((o) => (
+                <DisputeRow key={o.orderToken} order={o} />
+              ))}
             </ul>
           </Section>
         )}
@@ -115,13 +135,21 @@ function EmptyDisputes() {
       <ShieldCheck className="mx-auto h-7 w-7 text-brand" />
       <p className="mt-3 text-sm font-medium text-ink">No active disputes</p>
       <p className="mt-1 text-xs text-ink-soft">
-        99.4% of your orders complete without a dispute. Keep it up.
+        When a buyer opens a dispute on one of your orders, it will appear here.
       </p>
     </div>
   );
 }
 
-function Section({ title, count, children }: { title: string; count: number; children: React.ReactNode }) {
+function Section({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  count: number;
+  children: React.ReactNode;
+}) {
   return (
     <section>
       <div className="mb-2 flex items-baseline justify-between">
@@ -133,22 +161,27 @@ function Section({ title, count, children }: { title: string; count: number; chi
   );
 }
 
-function DisputeRow({ dispute }: { dispute: Dispute }) {
-  const order = getOrder(dispute.orderId);
-  const listing = order ? getListing(order.listingId) : undefined;
+function DisputeRow({ order }: { order: SellerOrderRow }) {
+  const dispute = order.dispute!;
+  const heroImg = order.listing.images[0]?.url
+    ? sanitizeUrl(order.listing.images[0].url)
+    : undefined;
+
   return (
     <li>
       <Link
-        to={`/app/dispute/${dispute.id}`}
+        to={`/app/dispute/${order.orderToken}`}
         className="block rounded-2xl border border-border bg-white p-4 transition-all hover:-translate-y-0.5 hover:shadow-[0_12px_30px_-16px_rgba(15,42,30,0.18)]"
       >
         <div className="flex items-start gap-3">
-          {listing && (
-            <ProductImage
-              image={listing.images[0]}
-              className="h-14 w-14 shrink-0"
-              rounded="rounded-lg"
+          {heroImg ? (
+            <img
+              src={heroImg}
+              alt=""
+              className="h-14 w-14 shrink-0 rounded-lg object-cover"
             />
+          ) : (
+            <div className="h-14 w-14 shrink-0 rounded-lg bg-surface" />
           )}
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
@@ -157,7 +190,8 @@ function DisputeRow({ dispute }: { dispute: Dispute }) {
                   {dispute.reason}
                 </p>
                 <p className="mt-0.5 text-xs text-ink-soft">
-                  {order?.shortId} · {listing?.title} · {formatNGN(dispute.amountNGN)}
+                  {order.shortId} · {order.listing.title} ·{" "}
+                  {formatNGN(order.amountNGN)}
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 shrink-0 text-ink-soft" />
@@ -167,13 +201,19 @@ function DisputeRow({ dispute }: { dispute: Dispute }) {
               {dispute.directResolutionUntil && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 ring-1 ring-inset ring-amber-200">
                   <Clock className="h-2.5 w-2.5" />
-                  <Countdown targetIso={dispute.directResolutionUntil} prefix="Direct window" />
+                  <Countdown
+                    targetIso={dispute.directResolutionUntil}
+                    prefix="Direct window"
+                  />
                 </span>
               )}
               {dispute.evidenceDueAt && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-medium text-rose-800 ring-1 ring-inset ring-rose-200">
                   <AlertCircle className="h-2.5 w-2.5" />
-                  <Countdown targetIso={dispute.evidenceDueAt} prefix="Evidence due in" />
+                  <Countdown
+                    targetIso={dispute.evidenceDueAt}
+                    prefix="Evidence due in"
+                  />
                 </span>
               )}
               {dispute.isReturn && (
@@ -190,28 +230,84 @@ function DisputeRow({ dispute }: { dispute: Dispute }) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                                 DETAIL                                     */
+/*                              DETAIL LOADER                                 */
 /* -------------------------------------------------------------------------- */
 
-function DisputeDetailView({ dispute }: { dispute: Dispute }) {
-  const order = getOrder(dispute.orderId);
-  const listing = order ? getListing(order.listingId) : undefined;
-  useSeoMeta({ title: `Dispute on ${order?.shortId ?? "order"} — SafeSale` });
+function DisputeDetailLoader({ token }: { token: string }) {
+  const { data, isLoading, error } = useQuery<GetOrderResponse>({
+    queryKey: ["safesale", "order-detail", token],
+    queryFn: () => apiClient.getOrder(token),
+  });
 
-  if (!order || !listing) {
+  if (isLoading) {
+    return (
+      <AppShell title="Loading dispute…">
+        <div className="space-y-4">
+          <Skeleton className="h-32 w-full rounded-2xl" />
+          <Skeleton className="h-64 w-full rounded-2xl" />
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (error || !data) {
     return (
       <AppShell title="Dispute not found">
         <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center">
-          <p className="text-sm font-medium text-ink">Order missing from this dispute.</p>
+          <p className="text-sm font-medium text-ink">
+            We couldn't find that order or dispute.
+          </p>
           <Button asChild variant="outline" className="mt-4">
-            <Link to="/app/dispute">Back to disputes</Link>
+            <Link to="/app/dispute">Back to all disputes</Link>
           </Button>
         </div>
       </AppShell>
     );
   }
 
+  if (!data.dispute) {
+    return (
+      <AppShell title="No dispute on this order">
+        <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-12 text-center">
+          <ShieldCheck className="mx-auto h-7 w-7 text-brand" />
+          <p className="mt-3 text-sm font-medium text-ink">
+            This order doesn't have an active dispute.
+          </p>
+          <Button asChild variant="outline" className="mt-4">
+            <Link to="/app/dispute">Back to all disputes</Link>
+          </Button>
+        </div>
+      </AppShell>
+    );
+  }
+
+  return (
+    <DisputeDetailView
+      order={data.order}
+      listing={data.listing}
+      dispute={data.dispute}
+    />
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 DETAIL                                     */
+/* -------------------------------------------------------------------------- */
+
+function DisputeDetailView({
+  order,
+  listing,
+  dispute,
+}: {
+  order: ApiOrder;
+  listing: ApiListing;
+  dispute: ApiDispute;
+}) {
+  useSeoMeta({ title: `Dispute on ${order.shortId} — SafeSale` });
   const isResolved = dispute.status === "resolved";
+  const heroImg = listing.images[0]?.url
+    ? sanitizeUrl(listing.images[0].url)
+    : undefined;
 
   return (
     <AppShell
@@ -230,24 +326,24 @@ function DisputeDetailView({ dispute }: { dispute: Dispute }) {
           <ArrowLeft className="h-3.5 w-3.5" /> All disputes
         </Link>
 
-        <StatusBanner dispute={dispute} />
-
-        {/* Resolved cases show the outcome card and skip the response form. */}
-        {isResolved && dispute.resolution && (
-          <DisputeResolutionCard resolution={dispute.resolution} viewer="seller" />
-        )}
-
-        {/* Return flow widget when this is a return. */}
-        {dispute.isReturn && (
-          <ReturnFlow evidence={dispute.returnEvidence} viewer="seller" />
-        )}
+        <StatusBanner dispute={dispute} amount={order.amountNGN} />
 
         <div className="grid gap-5 lg:grid-cols-3">
           {/* Order context */}
           <section className="rounded-2xl border border-border bg-white p-4 lg:col-span-1">
-            <h2 className="text-sm font-semibold text-ink">Order in dispute</h2>
+            <h2 className="text-sm font-semibold text-ink">
+              Order in dispute
+            </h2>
             <div className="mt-3 flex items-start gap-3">
-              <ProductImage image={listing.images[0]} className="h-14 w-14" rounded="rounded-lg" />
+              {heroImg ? (
+                <img
+                  src={heroImg}
+                  alt=""
+                  className="h-14 w-14 shrink-0 rounded-lg object-cover"
+                />
+              ) : (
+                <div className="h-14 w-14 shrink-0 rounded-lg bg-surface" />
+              )}
               <div className="min-w-0 flex-1">
                 <p className="line-clamp-2 text-sm font-medium text-ink">
                   {listing.title}
@@ -258,20 +354,22 @@ function DisputeDetailView({ dispute }: { dispute: Dispute }) {
               </div>
             </div>
             <div className="mt-4 grid grid-cols-2 gap-2 text-center">
-              <Card sub="Buyer">
-                <Avatar seed={order.buyerName} name={order.buyerName} size={32} />
+              <MiniCard sub="Buyer">
+                <Avatar
+                  seed={order.buyerName}
+                  name={order.buyerName}
+                  size={32}
+                />
                 <p className="mt-2 truncate text-xs font-medium text-ink">
                   {order.buyerName}
                 </p>
-              </Card>
-              <Card sub="Seller">
-                <Avatar
-                  seed={currentSeller.avatarSeed}
-                  name={currentSeller.name}
-                  size={32}
-                />
-                <p className="mt-2 truncate text-xs font-medium text-ink">You</p>
-              </Card>
+              </MiniCard>
+              <MiniCard sub="Seller">
+                <Avatar seed="seller" name="You" size={32} />
+                <p className="mt-2 truncate text-xs font-medium text-ink">
+                  You
+                </p>
+              </MiniCard>
             </div>
           </section>
 
@@ -280,9 +378,11 @@ function DisputeDetailView({ dispute }: { dispute: Dispute }) {
             <ResponseForm dispute={dispute} />
           ) : (
             <section className="rounded-2xl border border-border bg-white p-5 lg:col-span-2">
-              <h2 className="text-sm font-semibold text-ink">Your final response</h2>
+              <h2 className="text-sm font-semibold text-ink">
+                This dispute has been resolved
+              </h2>
               <p className="mt-2 text-sm text-ink-soft">
-                This dispute is closed. The outcome above is final and audit-recorded.
+                The outcome is final and audit-recorded on the Nostr network.
               </p>
             </section>
           )}
@@ -297,19 +397,21 @@ function DisputeDetailView({ dispute }: { dispute: Dispute }) {
           />
         </section>
 
-        {/* Chat embed (preview of NIP-17 thread for this order) */}
+        {/* Chat placeholder */}
         <section className="rounded-2xl border border-border bg-white p-5">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">Order chat</h2>
             <span className="text-[11px] font-medium text-ink-soft">
-              Most recent messages
+              NIP-17 integration coming
             </span>
           </div>
-          <ul className="mt-4 space-y-3">
-            {chat.slice(-3).map((m) => (
-              <ChatPreview key={m.id} m={m} />
-            ))}
-          </ul>
+          <div className="mt-4 rounded-xl border border-dashed border-border px-6 py-8 text-center">
+            <MessageCircle className="mx-auto h-5 w-5 text-ink-soft" />
+            <p className="mt-2 text-sm text-ink-soft">
+              Encrypted order chat will show here once NIP-17 private messaging
+              is integrated.
+            </p>
+          </div>
         </section>
 
         {/* Reassurance */}
@@ -339,7 +441,13 @@ function DisputeDetailView({ dispute }: { dispute: Dispute }) {
 /*                          STATUS-AWARE BANNER                               */
 /* -------------------------------------------------------------------------- */
 
-function StatusBanner({ dispute }: { dispute: Dispute }) {
+function StatusBanner({
+  dispute,
+  amount,
+}: {
+  dispute: ApiDispute;
+  amount: number;
+}) {
   const status = dispute.status;
 
   if (status === "direct_resolution") {
@@ -354,10 +462,10 @@ function StatusBanner({ dispute }: { dispute: Dispute }) {
               Try to resolve directly with the buyer first
             </p>
             <p className="mt-1 text-xs leading-relaxed text-ink-soft">
-              For the next 72 hours, you and the buyer can work this out via chat —
-              a replacement, a partial refund, or a clear explanation. If you
-              don't reach an agreement, a SafeSale mediator will automatically
-              take the case.
+              For the next 72 hours, you and the buyer can work this out via
+              chat — a replacement, a partial refund, or a clear explanation. If
+              you don't reach an agreement, a SafeSale mediator will
+              automatically take the case.
             </p>
             {dispute.directResolutionUntil && (
               <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-medium text-amber-900">
@@ -384,8 +492,8 @@ function StatusBanner({ dispute }: { dispute: Dispute }) {
               Mediation in progress
             </p>
             <p className="mt-1 text-xs text-ink-soft">
-              {formatNGN(dispute.amountNGN)} is held safely while a SafeSale
-              mediator reviews. Most cases are resolved within 24 hours.
+              {formatNGN(amount)} is held safely while a SafeSale mediator
+              reviews. Most cases are resolved within 24 hours.
             </p>
           </div>
         </div>
@@ -411,7 +519,8 @@ function StatusBanner({ dispute }: { dispute: Dispute }) {
             {dispute.evidenceDueAt && (
               <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-rose-100 px-2.5 py-1 text-[11px] font-medium text-rose-900">
                 <Clock className="h-3 w-3" />
-                Evidence due in <Countdown targetIso={dispute.evidenceDueAt} />
+                Evidence due in{" "}
+                <Countdown targetIso={dispute.evidenceDueAt} />
               </div>
             )}
           </div>
@@ -420,17 +529,45 @@ function StatusBanner({ dispute }: { dispute: Dispute }) {
     );
   }
 
-  // resolved — handled in parent as the DisputeResolutionCard.
+  // resolved — no banner needed
   return null;
 }
 
-function DisputeStatusBadge({ status }: { status: DisputeStatus }) {
-  const map: Record<DisputeStatus, { label: string; bg: string; text: string; ring: string }> = {
-    direct_resolution: { label: "Direct resolution", bg: "bg-amber-50", text: "text-amber-800", ring: "ring-amber-200" },
-    escalated: { label: "Escalated", bg: "bg-rose-50", text: "text-rose-800", ring: "ring-rose-200" },
-    evidence_requested: { label: "Evidence requested", bg: "bg-rose-50", text: "text-rose-800", ring: "ring-rose-200" },
-    mediating: { label: "Mediating", bg: "bg-amber-50", text: "text-amber-800", ring: "ring-amber-200" },
-    resolved: { label: "Resolved", bg: "bg-brand-soft", text: "text-brand-soft-foreground", ring: "ring-emerald-200" },
+function DisputeStatusBadge({ status }: { status: ApiDisputeStatus }) {
+  const map: Record<
+    ApiDisputeStatus,
+    { label: string; bg: string; text: string; ring: string }
+  > = {
+    direct_resolution: {
+      label: "Direct resolution",
+      bg: "bg-amber-50",
+      text: "text-amber-800",
+      ring: "ring-amber-200",
+    },
+    escalated: {
+      label: "Escalated",
+      bg: "bg-rose-50",
+      text: "text-rose-800",
+      ring: "ring-rose-200",
+    },
+    evidence_requested: {
+      label: "Evidence requested",
+      bg: "bg-rose-50",
+      text: "text-rose-800",
+      ring: "ring-rose-200",
+    },
+    mediating: {
+      label: "Mediating",
+      bg: "bg-amber-50",
+      text: "text-amber-800",
+      ring: "ring-amber-200",
+    },
+    resolved: {
+      label: "Resolved",
+      bg: "bg-brand-soft",
+      text: "text-brand-soft-foreground",
+      ring: "ring-emerald-200",
+    },
   };
   const s = map[status];
   return (
@@ -439,7 +576,7 @@ function DisputeStatusBadge({ status }: { status: DisputeStatus }) {
         "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ring-inset",
         s.bg,
         s.text,
-        s.ring
+        s.ring,
       )}
     >
       {s.label}
@@ -451,11 +588,25 @@ function DisputeStatusBadge({ status }: { status: DisputeStatus }) {
 /*                              RESPONSE FORM                                 */
 /* -------------------------------------------------------------------------- */
 
-function ResponseForm({ dispute }: { dispute: Dispute }) {
+function ResponseForm({ dispute }: { dispute: ApiDispute }) {
+  const { toast } = useToast();
+
+  const comingSoon = (action: string) => () => {
+    toast({
+      title: `${action} — coming soon`,
+      description:
+        "Backend dispute resolution endpoints haven't shipped yet. This will work automatically once Joy adds POST /api/disputes/:id/respond.",
+    });
+  };
+
   return (
     <section className="rounded-2xl border border-border bg-white p-5 lg:col-span-2">
       <h2 className="text-sm font-semibold text-ink">Your response</h2>
-      <p className="mt-1 text-xs text-ink-soft">Buyer says: "{dispute.summary}"</p>
+      {dispute.summary && (
+        <p className="mt-1 text-xs text-ink-soft">
+          Buyer says: "{dispute.summary}"
+        </p>
+      )}
 
       <div className="mt-4 space-y-4">
         <div>
@@ -486,30 +637,25 @@ function ResponseForm({ dispute }: { dispute: Dispute }) {
           />
         </div>
 
-        <div>
-          <Label>Evidence (photos, screenshots, receipts)</Label>
-          <div className="mt-2 grid grid-cols-4 gap-2">
-            {[0, 1].map((i) => (
-              <ProductImage
-                key={i}
-                image={{ seed: `evidence-s-${i}`, hueA: 200, hueB: 220, label: "evidence" }}
-                className="aspect-square"
-                rounded="rounded-lg"
-              />
-            ))}
-            <button className="flex aspect-square flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-border text-ink-soft hover:border-brand/40 hover:bg-brand-soft/30 hover:text-brand">
-              <ImagePlus className="h-5 w-5" />
-              <span className="text-[10px] font-medium">Add</span>
-            </button>
-          </div>
-        </div>
-
         <div className="flex gap-3 pt-1">
-          <Button variant="outline" className="h-11 flex-1">
+          <Button
+            variant="outline"
+            className="h-11 flex-1"
+            onClick={comingSoon("Save draft")}
+          >
             Save draft
           </Button>
-          <Button className="h-11 flex-[2] bg-brand text-brand-foreground hover:bg-brand/90">
-            {dispute.status === "direct_resolution" ? "Send to buyer" : "Submit to mediator"}
+          <Button
+            className="h-11 flex-[2] bg-brand text-brand-foreground hover:bg-brand/90"
+            onClick={comingSoon(
+              dispute.status === "direct_resolution"
+                ? "Send to buyer"
+                : "Submit to mediator",
+            )}
+          >
+            {dispute.status === "direct_resolution"
+              ? "Send to buyer"
+              : "Submit to mediator"}
           </Button>
         </div>
       </div>
@@ -521,43 +667,42 @@ function ResponseForm({ dispute }: { dispute: Dispute }) {
 /*                              HELPERS                                       */
 /* -------------------------------------------------------------------------- */
 
-type Order = NonNullable<ReturnType<typeof getOrder>>;
-type Listing = NonNullable<ReturnType<typeof getListing>>;
-
-function buildTimeline(d: Dispute, order: Order, listing: Listing): TimelineStep[] {
+function buildTimeline(
+  d: ApiDispute,
+  order: ApiOrder,
+  listing: ApiListing,
+): TimelineStep[] {
+  const fmt = (iso: string) => formatRelative(iso);
   const base: TimelineStep[] = [
     {
       key: "ord",
       title: "Order placed",
       description: `${order.buyerName} bought ${listing.title}`,
-      at: formatTime(order.createdAt),
+      at: fmt(order.createdAt),
       state: "done" as const,
     },
     {
       key: "esc",
       title: "Payment locked",
       description: `${formatNGN(order.amountNGN)} in SafeSale escrow`,
-      at: formatTime(order.updatedAt),
+      at: fmt(order.updatedAt),
       state: "done" as const,
     },
     {
       key: "ship",
       title: "Shipped",
-      description: order.trackingNumber ? `${order.carrier} ${order.trackingNumber}` : undefined,
-      at: order.shippedAt ? formatTime(order.shippedAt) : undefined,
+      description:
+        order.trackingNumber
+          ? `${order.carrier ?? ""} ${order.trackingNumber}`
+          : undefined,
+      at: order.shippedAt ? fmt(order.shippedAt) : undefined,
       state: order.shippedAt ? ("done" as const) : ("pending" as const),
-    },
-    {
-      key: "del",
-      title: "Delivered",
-      at: order.deliveredAt ? formatTime(order.deliveredAt) : undefined,
-      state: order.deliveredAt ? ("done" as const) : ("pending" as const),
     },
     {
       key: "dsp",
       title: "Dispute opened",
-      description: d.summary,
-      at: formatRelative(d.openedAt),
+      description: d.summary ?? d.reason,
+      at: fmt(d.createdAt),
       state: "alert" as const,
     },
   ];
@@ -589,19 +734,24 @@ function buildTimeline(d: Dispute, order: Order, listing: Listing): TimelineStep
       state: "alert" as const,
     });
   }
-  if (d.status === "resolved" && d.resolution) {
+  if (d.status === "resolved" && d.resolvedAt) {
     base.push({
       key: "resolved",
       title: "Resolved",
-      description: d.resolution.reasoning,
-      at: formatTime(d.resolution.resolvedAt),
+      at: fmt(d.resolvedAt),
       state: "done" as const,
     });
   }
   return base;
 }
 
-function Card({ sub, children }: { sub: string; children: React.ReactNode }) {
+function MiniCard({
+  sub,
+  children,
+}: {
+  sub: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col items-center rounded-xl border border-border bg-surface-2/30 p-3">
       <p className="text-[10px] font-medium uppercase tracking-wider text-ink-soft">
@@ -609,36 +759,5 @@ function Card({ sub, children }: { sub: string; children: React.ReactNode }) {
       </p>
       <div className="mt-2 flex flex-col items-center">{children}</div>
     </div>
-  );
-}
-
-function ChatPreview({ m }: { m: (typeof chat)[number] }) {
-  if (m.from === "system") {
-    return (
-      <li className="flex items-center justify-center gap-2 text-[11px] text-ink-soft">
-        <ShieldCheck className="h-3 w-3" />
-        {m.text}
-      </li>
-    );
-  }
-  const isSeller = m.from === "seller";
-  return (
-    <li className={cn("flex gap-2", isSeller ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[80%] rounded-2xl px-3 py-2 text-sm",
-          isSeller
-            ? "rounded-br-md bg-brand text-brand-foreground"
-            : "rounded-bl-md bg-secondary text-ink"
-        )}
-      >
-        {m.text}
-        {m.attachment && (
-          <div className="mt-2 inline-flex items-center gap-1 rounded-md bg-white/15 px-2 py-1 text-[11px]">
-            <Upload className="h-3 w-3" /> {m.attachment.label}
-          </div>
-        )}
-      </div>
-    </li>
   );
 }

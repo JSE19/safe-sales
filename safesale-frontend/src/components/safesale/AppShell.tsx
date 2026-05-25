@@ -1,6 +1,7 @@
-import { Link, NavLink, useLocation } from "react-router-dom";
-import { useState } from "react";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useState, useCallback } from "react";
 import { nip19 } from "nostr-tools";
+import { useNostrLogin } from "@nostrify/react/login";
 import { cn } from "@/lib/utils";
 import { Logo, LogoMark } from "./Logo";
 import { Avatar } from "./Avatar";
@@ -12,6 +13,12 @@ import {
   Bell,
   Search,
   Scale,
+  Key,
+  Copy,
+  Eye,
+  EyeOff,
+  LogOut,
+  Check,
 } from "lucide-react";
 
 import { useCurrentSeller } from "@/hooks/useCurrentSeller";
@@ -73,7 +80,12 @@ function buildSidebarGroups(activeDisputes: number) {
 export function AppShell({ children, title, subtitle, action }: Props) {
   const [notifsOpen, setNotifsOpen] = useState(false);
   const [hasUnread, setHasUnread] = useState(false);
+  const [showKeyBackup, setShowKeyBackup] = useState(false);
+  const [keyRevealed, setKeyRevealed] = useState(false);
+  const [keyCopied, setKeyCopied] = useState(false);
   const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const { logins, removeLogin } = useNostrLogin();
 
   // Real signed-in identity. `seller` is the SafeSale profile from
   // `useCurrentSeller` (set by Onboarding after POST /api/sellers).
@@ -98,6 +110,29 @@ export function AppShell({ children, title, subtitle, action }: Props) {
   const displayHandle = trustedSeller?.handle ?? metadata?.nip05?.split("@")[0] ?? null;
   const avatarSeed = sellerNpub ?? user?.pubkey ?? "guest";
 
+  // Extract the nsec from the current login for key backup/export.
+  // Nostrify stores the login as { type: 'nsec', nsec: 'nsec1...' }
+  const currentLogin = logins[0] as { type: string; nsec?: string } | undefined;
+  const storedNsec = currentLogin?.type === 'nsec' ? currentLogin.nsec ?? null : null;
+
+  const copyNsec = useCallback(async () => {
+    if (!storedNsec) return;
+    try {
+      await navigator.clipboard.writeText(storedNsec);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 2000);
+    } catch {
+      // Fallback for older browsers
+      const ta = document.createElement("textarea");
+      ta.value = storedNsec;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 2000);
+    }
+  }, [storedNsec]);
   // Live dispute count off the real seller-orders feed. When the seller
   // isn't signed in, returns 0 — hook is `enabled: !!npub` internally.
   const { orders } = useSellerOrders();
@@ -155,7 +190,11 @@ export function AppShell({ children, title, subtitle, action }: Props) {
           ))}
         </nav>
         <div className="border-t border-border p-3">
-          <div className="flex items-center gap-3 rounded-lg p-2">
+          <button
+            type="button"
+            onClick={() => { setShowKeyBackup(!showKeyBackup); setKeyRevealed(false); }}
+            className="flex w-full items-center gap-3 rounded-lg p-2 text-left transition-colors hover:bg-secondary"
+          >
             <Avatar seed={avatarSeed} name={displayName} size={36} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-ink">{displayName}</p>
@@ -167,7 +206,58 @@ export function AppShell({ children, title, subtitle, action }: Props) {
                 </Link>
               ) : null}
             </div>
-          </div>
+          </button>
+
+          {/* Key backup panel — slides open when clicked */}
+          {showKeyBackup && storedNsec && (
+            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-3 animate-in slide-in-from-bottom-2 duration-200">
+              <div className="flex items-center gap-2 text-xs font-medium text-amber-900">
+                <Key className="h-3.5 w-3.5" />
+                Your secret key (nsec)
+              </div>
+              <p className="mt-1 text-[10px] text-amber-800">
+                Save this somewhere safe. It's the ONLY way to recover your shop on a new device.
+              </p>
+              <div className="mt-2 flex items-center gap-1.5">
+                <code className="flex-1 overflow-hidden rounded-md border border-amber-200 bg-white px-2 py-1.5 font-mono text-[10px] text-ink select-all">
+                  {keyRevealed
+                    ? storedNsec
+                    : storedNsec.substring(0, 10) + "••••••••••••••••"}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => setKeyRevealed(!keyRevealed)}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-white text-amber-800 hover:bg-amber-100"
+                  aria-label={keyRevealed ? "Hide key" : "Reveal key"}
+                >
+                  {keyRevealed ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={copyNsec}
+                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-white text-amber-800 hover:bg-amber-100"
+                  aria-label="Copy key"
+                >
+                  {keyCopied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Logout */}
+          {user && (
+            <button
+              type="button"
+              onClick={() => {
+                if (logins[0]) removeLogin(logins[0].id);
+                navigate("/onboarding");
+              }}
+              className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-ink-soft transition-colors hover:bg-secondary hover:text-ink"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              Log out
+            </button>
+          )}
         </div>
       </aside>
 
