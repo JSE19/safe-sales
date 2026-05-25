@@ -144,8 +144,8 @@ function Hero() {
         }}
       />
       <div className="container grid gap-10 pb-12 pt-12 lg:grid-cols-12 lg:gap-12 lg:pb-24 lg:pt-20">
-        <div className="lg:col-span-6 lg:pt-6">
-          <span className="inline-flex items-center gap-2 rounded-full bg-brand-soft px-3 py-1 text-xs font-medium text-brand-soft-foreground ring-1 ring-inset ring-emerald-200/60">
+        <div className="lg:col-span-6 lg:pt-6 animate-slide-up">
+          <span className="inline-flex items-center gap-2 rounded-full bg-brand-soft px-3 py-1 text-xs font-medium text-brand-soft-foreground ring-1 ring-inset ring-emerald-200/60 animate-fade-in">
             <Sparkles className="h-3.5 w-3.5" />
             Escrow for social commerce
           </span>
@@ -162,11 +162,11 @@ function Hero() {
             refunds, no more fear of scams.
           </p>
 
-          <div className="mt-7 flex flex-wrap gap-3">
+          <div className="mt-7 flex flex-wrap gap-3 animate-fade-in" style={{ animationDelay: '150ms' }}>
             <Button
               asChild
               size="lg"
-              className="h-12 rounded-lg bg-brand px-6 text-base font-semibold text-brand-foreground shadow-[0_8px_24px_-8px_color-mix(in_oklab,var(--brand)_70%,transparent)] hover:bg-brand/90"
+              className="h-12 rounded-lg bg-brand px-6 text-base font-semibold text-brand-foreground shadow-[0_8px_24px_-8px_color-mix(in_oklab,var(--brand)_70%,transparent)] hover:bg-brand/90 transition-all duration-300 hover:-translate-y-0.5"
             >
               <Link to={cta.to}>
                 {cta.label} <ArrowRight className="ml-1 h-4 w-4" />
@@ -176,29 +176,29 @@ function Hero() {
               asChild
               variant="outline"
               size="lg"
-              className="h-12 rounded-lg border-border bg-white px-6 text-base"
+              className="h-12 rounded-lg border-border bg-white px-6 text-base hover:bg-surface-2 transition-all duration-300 hover:-translate-y-0.5"
             >
               <a href="#how-it-works">See how it works</a>
             </Button>
           </div>
 
-          <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-ink-soft">
-            <span className="inline-flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-brand" />
+          <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3 text-sm text-ink-soft animate-fade-in" style={{ animationDelay: '300ms' }}>
+            <span className="inline-flex items-center gap-2 transition-transform duration-300 hover:translate-x-1">
+              <ShieldCheck className="h-4 w-4 text-brand animate-lock-pulse" />
               No custodian — your money, your keys
             </span>
-            <span className="inline-flex items-center gap-2">
+            <span className="inline-flex items-center gap-2 transition-transform duration-300 hover:translate-x-1">
               <Lock className="h-4 w-4 text-brand" />
               Buyer signature required to release
             </span>
-            <span className="inline-flex items-center gap-2">
+            <span className="inline-flex items-center gap-2 transition-transform duration-300 hover:translate-x-1">
               <CheckCircle2 className="h-4 w-4 text-brand" />
               Built on Cashu + Nostr
             </span>
           </div>
         </div>
 
-        <div className="relative lg:col-span-6">
+        <div className="relative lg:col-span-6 animate-slide-up" style={{ animationDelay: '200ms' }}>
           <HeroMockup />
         </div>
       </div>
@@ -209,31 +209,31 @@ function Hero() {
 function HeroMockup() {
   return (
     <div className="relative mx-auto max-w-md">
-      <div className="relative mx-auto w-full overflow-hidden rounded-[36px] border border-border bg-white shadow-[0_30px_80px_-30px_rgba(15,42,30,0.25)] flex flex-col">
+      <div className="relative mx-auto w-full overflow-hidden rounded-[36px] border border-border bg-white shadow-[0_30px_80px_-30px_rgba(15,42,30,0.25)] flex flex-col transition-all duration-500 hover:scale-[1.02] hover:-translate-y-1.5 hover:shadow-[0_45px_100px_-25px_rgba(15,42,30,0.3)]">
         <div className="p-1.5 pb-0 bg-surface">
           <div className="w-full h-8 flex justify-center items-center">
             <span className="h-1.5 w-16 bg-slate-200 rounded-full"></span>
           </div>
         </div>
         <img
-          src="https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80"
-          alt="E-commerce social product"
+          src="https://images.unsplash.com/photo-1551537482-f2075a1d41f2?w=800&q=80"
+          alt="Vintage Ralph Lauren Denim Jacket"
           className="w-full object-cover"
           style={{ height: '450px' }}
         />
         <div className="px-5 py-6 bg-white flex flex-col h-full rounded-b-[36px]">
           <div className="flex justify-between items-center mb-3">
              <h3 className="text-[17px] font-semibold leading-snug text-ink">
-                Vintage Sneaker Deals
+                Vintage Denim Jacket
              </h3>
-             <span className="text-lg font-semibold text-ink">
+             <span className="text-lg font-semibold text-brand">
                 ₦28,500
              </span>
           </div>
           <button
             type="button"
             disabled
-            className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 text-sm font-semibold text-brand-foreground opacity-90"
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-brand py-3 text-sm font-semibold text-brand-foreground opacity-90 transition-all duration-300 hover:opacity-100"
             aria-label="Example buy button (not interactive)"
           >
             <Lock className="h-4 w-4" />
@@ -243,7 +243,7 @@ function HeroMockup() {
       </div>
     
       {/* Floating seller rating card */}
-      <div className="absolute -bottom-4 -right-2 hidden w-56 rotate-[5deg] rounded-2xl border border-border bg-white p-3 shadow-[0_20px_40px_-20px_rgba(15,42,30,0.25)] sm:block">
+      <div className="absolute -bottom-4 -right-2 hidden w-56 rotate-[5deg] rounded-2xl border border-border bg-white p-3 shadow-[0_20px_40px_-20px_rgba(15,42,30,0.25)] sm:block transition-all duration-500 hover:scale-105 hover:rotate-[2deg] hover:translate-x-1.5 hover:shadow-[0_30px_50px_-15px_rgba(15,42,30,0.3)]">
         <div className="flex items-center gap-2">
           <Avatar seed="tomiwa" name="T" size={32} />
           <div className="min-w-0">
@@ -252,7 +252,7 @@ function HeroMockup() {
           </div>
         </div>
         <p className="mt-2 line-clamp-2 text-[11px] text-ink-soft">
-          "Sneakers were flawless. Great escrow experience!"
+          "Denim jacket was flawless. Great escrow experience!"
         </p>
       </div>
     </div>
