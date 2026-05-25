@@ -180,7 +180,7 @@ To run both the frontend and backend services on your machine:
 ## 👩‍💻 The SafeSale Team
 
 * **Joy** — Backend Architecture, Cashu eCash primitives, and Nostr DM dispatching
-* **Mutmahinat** — Frontend Engineering, UI/UX Design, Nostrify Integration, and State Wiring
+* **Feyisara** — Frontend Engineering, UI/UX Design, Nostrify Integration, and State Wiring
 
 ---
 
@@ -205,6 +205,6 @@ We welcome developers, designers, and security researchers to join us in buildin
 
 ---
 
-## 📄 License
+## 📄 License & Open-Source Dedication
 
-This project is licensed under the MIT License.
+This project is currently submitted for **Hack4Freedom 2026**. Following the hackathon, the repository and its entire codebase are dedicated to the public open-source community under the **MIT License**. It will serve as a censorship-resistant, zero-custody framework for decentralized commerce across the Global South.
