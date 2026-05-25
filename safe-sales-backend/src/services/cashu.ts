@@ -23,9 +23,19 @@
 
 import { CashuMint, CashuWallet, getEncodedTokenV4 } from '@cashu/cashu-ts';
 import type { MintKeys, MintKeyset } from '@cashu/cashu-ts';
+import { getPublicKey } from 'nostr-tools';
 import { env } from '../env.js';
 import { logger } from '../lib/logger.js';
 import { BadRequest } from '../lib/errors.js';
+
+const DEMO_TOKEN_PREFIX = 'safesale_demo_cashu_v1:';
+
+function hexToBytes(hex: string): Uint8Array {
+  if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {
+    throw new BadRequest('Invalid hex string');
+  }
+  return Uint8Array.from(hex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) ?? []);
+}
 
 let _mint: CashuMint | null = null;
 let _cachedKeys: MintKeys | null = null;
@@ -192,6 +202,67 @@ export async function mintLockedToken(
 }
 
 /**
+ * Deterministic demo-only token used when the public test mint is down.
+ * It is intentionally prefixed so release can identify it without trying
+ * to send it to a Cashu mint.
+ */
+export function createDemoLockedToken(
+  amountSats: number,
+  buyerNostrPubkey: string,
+  orderToken: string,
+): string {
+  if (amountSats < 1) throw new BadRequest('amountSats must be >= 1');
+  if (!/^[0-9a-fA-F]{64}$/.test(buyerNostrPubkey)) {
+    throw new BadRequest('Invalid Nostr pubkey (expected 64-char hex)');
+  }
+
+  const payload = {
+    amountSats,
+    buyerPubkey: buyerNostrPubkey.toLowerCase(),
+    orderToken,
+    mintedAt: new Date().toISOString(),
+  };
+
+  return DEMO_TOKEN_PREFIX + Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function readDemoLockedToken(token: string): {
+  amountSats: number;
+  buyerPubkey: string;
+  orderToken: string;
+} | null {
+  if (!token.startsWith(DEMO_TOKEN_PREFIX)) return null;
+
+  try {
+    const raw = Buffer.from(token.slice(DEMO_TOKEN_PREFIX.length), 'base64url').toString('utf8');
+    const parsed = JSON.parse(raw) as {
+      amountSats?: unknown;
+      buyerPubkey?: unknown;
+      orderToken?: unknown;
+    };
+    if (
+      typeof parsed.amountSats !== 'number' ||
+      !Number.isInteger(parsed.amountSats) ||
+      parsed.amountSats < 1 ||
+      typeof parsed.buyerPubkey !== 'string' ||
+      !/^[0-9a-fA-F]{64}$/.test(parsed.buyerPubkey) ||
+      typeof parsed.orderToken !== 'string'
+    ) {
+      throw new Error('invalid demo token payload');
+    }
+    return {
+      amountSats: parsed.amountSats,
+      buyerPubkey: parsed.buyerPubkey.toLowerCase(),
+      orderToken: parsed.orderToken,
+    };
+  } catch (err) {
+    throw new BadRequest(
+      `Invalid demo Cashu token: ${err instanceof Error ? err.message : 'unknown'}`,
+    );
+  }
+}
+
+/**
  * Redeem a P2PK-locked Cashu token using the buyer's Nostr private key.
  *
  * Returns the unlocked sat amount. The proofs themselves are absorbed
@@ -207,6 +278,24 @@ export async function redeemLockedToken(
 ): Promise<{ amountSats: number }> {
   if (!/^[0-9a-fA-F]{64}$/.test(buyerNostrHexPrivateKey)) {
     throw new BadRequest('Invalid Nostr private key (expected 64-char hex)');
+  }
+
+  const demoToken = readDemoLockedToken(token);
+  if (demoToken) {
+    const derivedPubkey = getPublicKey(hexToBytes(buyerNostrHexPrivateKey));
+    if (derivedPubkey.toLowerCase() !== demoToken.buyerPubkey) {
+      throw new BadRequest('Cashu redeem failed: demo token key mismatch');
+    }
+
+    logger.warn(
+      {
+        amountSats: demoToken.amountSats,
+        orderToken: demoToken.orderToken,
+        buyerNostrPubkey: demoToken.buyerPubkey.substring(0, 12) + '...',
+      },
+      'Demo Cashu token released without contacting mint',
+    );
+    return { amountSats: demoToken.amountSats };
   }
 
   const wallet = await buildWallet();

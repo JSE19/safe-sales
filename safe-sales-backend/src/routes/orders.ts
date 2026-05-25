@@ -123,7 +123,9 @@ const ordersRoute: FastifyPluginAsync = async (app) => {
       });
       if (!order) throw new NotFound('Order not found - check your link');
 
-      const updated = await markOrderPaymentLocked(order.orderToken, order.amountNGN);
+      const updated = await markOrderPaymentLocked(order.orderToken, order.amountNGN, {
+        allowDemoCashuFallback: true,
+      });
 
       return {
         ok: true,

@@ -1,19 +1,12 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '../db/client.js';
-import { BadRequest, NotFound, Conflict } from '../lib/errors.js';
-import { mintLockedToken } from '../services/cashu.js';
-import { sendBrandDM } from '../services/nostr.js';
+import { BadRequest, Conflict, NotFound } from '../lib/errors.js';
+import { createDemoLockedToken, mintLockedToken } from '../services/cashu.js';
 import { sendBuyerOrderLinkEmail } from '../services/email.js';
 import { logger } from '../lib/logger.js';
+import { sendBrandDM } from '../services/nostr.js';
 
-/**
- * Bitnob's "successful credit" webhook shape (approximate — we don't have
- * full sandbox docs yet). The fields we actually need are:
- *   - event: e.g. "wallet.credit" / "virtual-account.credited"
- *   - data.reference / data.virtualAccount — used to identify which order
- *   - data.amount — naira amount credited
- */
 const BitnobWebhookSchema = z.object({
   event: z.string().min(1),
   data: z.object({
@@ -28,27 +21,10 @@ const BitnobWebhookSchema = z.object({
   }),
 });
 
-/**
- * Mark an order's payment as locked, mint+lock the Cashu token, notify
- * the seller via Nostr DM. Idempotent — calling twice on an already-locked
- * order returns the existing record without re-minting.
- *
- * This is the heart of Phase 6's webhook side:
- *   1. Status transitions pending_payment → payment_locked
- *   2. A Cashu token worth `order.amountSats` is minted at the configured
- *      mint and NUT-11 P2PK-locked to order.buyerPubkey
- *   3. The encoded token is persisted on order.cashuToken — that string
- *      can ONLY be redeemed by the buyer's private key
- *   4. The seller receives an encrypted Nostr DM telling them to ship
- *
- * If the Cashu mint fails we DO NOT advance the order status — the
- * webhook caller (Bitnob) will retry. Advancing status without a token
- * was a previous bug that left orders in a "locked but no token" state
- * which broke release. Nostr DM failure is non-fatal (logged only).
- */
 export async function markOrderPaymentLocked(
   orderToken: string,
   amountReceivedNGN: number,
+  options: { allowDemoCashuFallback?: boolean } = {},
 ) {
   const order = await prisma.order.findUnique({
     where: { orderToken },
@@ -57,10 +33,10 @@ export async function markOrderPaymentLocked(
   if (!order) throw new NotFound(`Order with token "${orderToken}" not found`);
 
   if (order.status === 'payment_locked') {
-    return order; // idempotent
+    return order;
   }
   if (order.status !== 'pending_payment') {
-    throw new Conflict(`Order status is "${order.status}" — cannot lock payment`);
+    throw new Conflict(`Order status is "${order.status}" - cannot lock payment`);
   }
   if (amountReceivedNGN < order.amountNGN) {
     throw new BadRequest(
@@ -68,26 +44,34 @@ export async function markOrderPaymentLocked(
     );
   }
 
-  // Mint + P2PK-lock the Cashu token. This is the cryptographic escrow.
-  // If this throws, we let it propagate — caller (Bitnob webhook) will
-  // see a 5xx and retry. We do NOT advance the order status because
-  // doing so without a token leaves the buyer with a redeem that 400s.
   let cashuToken: string;
+  let usedDemoCashuFallback = false;
   try {
     cashuToken = await mintLockedToken(order.amountSats, order.buyerPubkey);
   } catch (err) {
-    logger.error(
-      {
-        orderId: order.id,
-        orderToken: order.orderToken,
-        amountSats: order.amountSats,
-        err: err instanceof Error ? err.message : err,
-        stack: err instanceof Error ? err.stack : undefined,
-      },
-      'Cashu mint failed — order remains in pending_payment, webhook should retry',
-    );
-    throw new Error(
-      `Cashu mint failed: ${err instanceof Error ? err.message : 'unknown'}`,
+    const errorDetails = {
+      orderId: order.id,
+      orderToken: order.orderToken,
+      amountSats: order.amountSats,
+      err: err instanceof Error ? err.message : err,
+      stack: err instanceof Error ? err.stack : undefined,
+    };
+
+    if (!options.allowDemoCashuFallback) {
+      logger.error(
+        errorDetails,
+        'Cashu mint failed - order remains in pending_payment, webhook should retry',
+      );
+      throw new Error(
+        `Cashu mint failed: ${err instanceof Error ? err.message : 'unknown'}`,
+      );
+    }
+
+    cashuToken = createDemoLockedToken(order.amountSats, order.buyerPubkey, order.orderToken);
+    usedDemoCashuFallback = true;
+    logger.warn(
+      errorDetails,
+      'Cashu mint failed - using demo token fallback for manual payment confirmation',
     );
   }
 
@@ -96,15 +80,18 @@ export async function markOrderPaymentLocked(
     data: {
       status: 'payment_locked',
       cashuToken,
+      notes: usedDemoCashuFallback
+        ? [order.notes, 'Payment confirmed through demo fallback; Cashu mint unavailable.']
+            .filter(Boolean)
+            .join('\n')
+        : order.notes,
     },
   });
 
-  // Notify the seller via encrypted Nostr DM (best-effort — DM failure
-  // is non-fatal; the order is locked and the buyer can still release).
   try {
     const message =
-      `New order on SafeSale: "${order.listing.title}" — ` +
-      `₦${order.amountNGN.toLocaleString('en-NG')} locked in escrow. ` +
+      `New order on SafeSale: "${order.listing.title}" - ` +
+      `NGN ${order.amountNGN.toLocaleString('en-NG')} locked in escrow. ` +
       `Buyer: ${order.buyerName} (${order.buyerCity}). ` +
       `Ship and mark as shipped to start the buyer's confirmation window.`;
     await sendBrandDM(order.seller.pubkey, message);
@@ -124,15 +111,7 @@ export async function markOrderPaymentLocked(
 }
 
 const webhooksRoute: FastifyPluginAsync = async (app) => {
-  // POST /api/webhooks/bitnob — receives Bitnob credit notifications
-  // For MVP we accept either:
-  //   1. A real Bitnob webhook payload (whenever the sandbox lands)
-  //   2. A simplified test payload with metadata.orderToken
   app.post('/api/webhooks/bitnob', async (request) => {
-    // Phase 7: verify HMAC-SHA256 signature against env.BITNOB_WEBHOOK_SECRET
-    //   header: x-bitnob-signature
-    //   raw body required — would need fastify rawBody plugin
-
     const payload = BitnobWebhookSchema.parse(request.body);
 
     const orderToken = payload.data.metadata?.orderToken ?? payload.data.reference;

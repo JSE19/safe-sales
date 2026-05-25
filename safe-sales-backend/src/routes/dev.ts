@@ -34,7 +34,9 @@ const devRoute: FastifyPluginAsync = async (app) => {
       amount = order.amountNGN;
     }
 
-    const updated = await markOrderPaymentLocked(body.orderToken, amount);
+    const updated = await markOrderPaymentLocked(body.orderToken, amount, {
+      allowDemoCashuFallback: true,
+    });
     return { ok: true, orderId: updated.id, status: updated.status, simulatedAmountNGN: amount };
   });
 };
