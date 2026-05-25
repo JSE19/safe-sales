@@ -2,7 +2,7 @@
 
 > **READ THIS FIRST** at the start of every session. Skim it top-to-bottom in ~2 minutes and you'll have full context on what we're building, what's done, what's next, and the rules we work under.
 
-Last updated: 2026-05-25 after Phase 7.5 (demo-friendly payment confirmation + Resend email + boot-resilience fix).
+Last updated: 2026-05-25 after Phase 7.5 + CORS fix (Vercel frontend now allowed via regex; "failed to fetch" toast root cause was missing ACAO header for *.vercel.app origins).
 
 ---
 
@@ -85,6 +85,7 @@ ESM (`"type": "module"`). NodeNext module resolution. Strict tsconfig (`noUnused
 | 6.5 | Committed smoke test (`npm run smoke`, `scripts/smoke.ts`) — full 8-step end-to-end verification, parameterized by `SMOKE_BASE_URL` for both local + Railway | ✅ 8/8 green locally on every run |
 | 7 | Deploy to Railway with public URL, all env vars set, `/health` serving over HTTPS, `npm run smoke` against the public URL passes 8/8 | ✅ live at `https://safe-sales-backend-production.up.railway.app` |
 | 7.5 | Demo-friendly payment confirmation: `/api/orders/:token/confirm-payment` (frontend Demo button), demo Cashu fallback for when the public mint is down, Resend buyer-email integration, boot-resilience + bounded mint timeouts | ✅ committed; smoke 8/8 still green; awaiting Railway env-var swap to `orders@shopke.org` |
+| 7.6 | CORS fix: partner's Vercel frontend was getting "failed to fetch" because `*.vercel.app` wasn't in the exact-match `FRONTEND_ORIGINS` list. Added `FRONTEND_ORIGIN_REGEXES` (default allows any `*.vercel.app`), kept exact-match list for non-wildcard prod URLs. Verified preflight from `https://x.vercel.app` now returns `Access-Control-Allow-Origin: https://x.vercel.app`. | ✅ committed; needs push to take effect on Railway |
 
 **Trustless guarantee proven on Railway production** (2026-05-22 04:36 UTC):
 - Wrong-key release: `400 BAD_REQUEST "Cashu redeem failed: Witness is missing for p2pk signature"`
@@ -173,6 +174,31 @@ When both Bitnob AND the Cashu mint are healthy on mainnet (Phase 9+), the demo 
 
 ---
 
+## Phase 7.6 — CORS fix for Vercel frontend (the actual cause of the "failed to fetch" toast)
+
+User reported clicking "Confirm Payment (Demo)" on the Vercel-deployed frontend produced "Payment confirmation failed — failed to fetch — the Cashu mint may be busy" — even after Phase 7.5 shipped. Railway logs showed the container booting cleanly and `/health` returning 200. Hypothesis: CORS.
+
+**Verified via curl-equivalent:** `OPTIONS /api/orders/:token/confirm-payment` from `Origin: https://safesales-frontend.vercel.app` returned **HTTP 204 with NO `Access-Control-Allow-Origin` header**. Browser blocks the request → `fetch()` throws TypeError → frontend's catch-all toast says "failed to fetch", which its retry/UX copy generously translates to "the Cashu mint may be busy".
+
+**Root cause:** `FRONTEND_ORIGINS` was an exact-match list (`http://localhost:8080,http://localhost:5173`). The partner's deployed Vercel origin was never added. Worse, Vercel issues a new hostname per preview deploy — even if we added the production URL, every PR preview would still break.
+
+**Fix:** introduced `FRONTEND_ORIGIN_REGEXES` env var alongside `FRONTEND_ORIGINS`. Default value `^https://([a-z0-9-]+\.)*vercel\.app$` allows any `*.vercel.app` subdomain. CORS now uses a function callback: same-origin allowed, exact-match list allowed, regex match allowed, everything else rejected with a `logger.warn` line so denied origins show up in Railway logs.
+
+| File | Change |
+|---|---|
+| `src/env.ts` | New `FRONTEND_ORIGIN_REGEXES` env var, default `^https://([a-z0-9-]+\.)*vercel\.app$`, parsed at boot into `RegExp[]` |
+| `src/index.ts` | CORS now uses a function callback that checks exact-match then regex-match, logs a warn on rejection |
+| `.env.example` | Documented the new env var with examples for vercel/netlify/shopke.org subdomains |
+
+**Security note:** echoing back the request's `Origin` value into `ACAO` is only safe when we've actually validated it against the allowlist (we do). The `credentials: true` setting + echoed-origin pattern is the standard Fastify approach. We don't issue session cookies anyway — auth is via `orderToken` in the URL, so the attack surface from a misallowed origin is minimal.
+
+**Verified locally:**
+- `https://safesales-foo-bar.vercel.app` → 204 with `Access-Control-Allow-Origin: https://safesales-foo-bar.vercel.app` ✓
+- `https://malicious.example.com` → 404 with no ACAO ✓
+- regex unit-tested for path-suffix and protocol-prefix attacks
+
+---
+
 ## Key decisions made (don't re-litigate)
 
 | Decision | Why |
@@ -204,6 +230,12 @@ The user's local `.env` has the real values. Don't echo them. Required for the s
 - `NOSTR_RELAYS` — `wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net`
 - `BITNOB_*` — left empty; mocked for MVP
 
+### CORS env vars
+
+- `FRONTEND_ORIGINS` — comma-separated exact-match origins. Production should include the partner's stable production URL (e.g. `https://safesales.vercel.app`). Dev defaults to `http://localhost:8080,http://localhost:5173`.
+- `FRONTEND_ORIGIN_REGEXES` — comma-separated regex patterns. Default `^https://([a-z0-9-]+\.)*vercel\.app$` allows ALL `*.vercel.app` deploys (production + every PR preview). Escape backslashes since this is a string env var.
+- A request with no `Origin` header (curl, server-to-server, healthcheck) is always allowed.
+
 ### Resend (email) env vars
 
 - `RESEND_API_KEY` — set on Railway with your real key (`re_...`).
@@ -216,7 +248,7 @@ The user's local `.env` has the real values. Don't echo them. Required for the s
 - `NODE_ENV=production` is set on Railway (this 404s `/api/dev/simulate-payment` — security)
 - `PORT` is **not** set on Railway — Railway injects its own at runtime, our code reads it
 - `DATABASE_URL=${{Postgres.DATABASE_URL}}` uses Railway's private network (faster than the public proxy)
-- `FRONTEND_ORIGINS=http://localhost:8080,http://localhost:5173` — append the partner's prod frontend URL when it exists
+- `FRONTEND_ORIGINS=http://localhost:8080,http://localhost:5173` — append the partner's prod frontend URL when it exists. Wildcard `*.vercel.app` is already covered by the `FRONTEND_ORIGIN_REGEXES` default — no action needed for vercel preview deploys.
 
 ---
 
@@ -264,7 +296,8 @@ The frontend already has all these pages — they just call mock functions. Wiri
 - **Local branch:** `backend`
 - **Tracking:** `origin/backend`
 - **Recent commits (most recent first):**
-  - `(pending)` fix(backend): boot-resilient mint check, typed 503 for mint failures, defensive email try/catch, healthcheckTimeout 90s, Resend domain docs, STATE.md refresh
+  - `(pending)` fix(cors): allow *.vercel.app via FRONTEND_ORIGIN_REGEXES; root cause of the "failed to fetch" toast
+  - `2a0743a` fix(backend): boot-resilient mint check, typed 503 for mint failures, defensive email try/catch
   - `a7f4a1d` Cashew Mint Check (demo-token fallback + confirm-payment route)
   - `5fcda46` Send Mail Resend
   - `9399a9b` Send Mail containing link
@@ -293,12 +326,17 @@ Phase 7.5 is **done locally**, awaiting user's `git push` and Railway redeploy. 
 
 1. **Verify Railway deploy.** Hit `https://safe-sales-backend-production.up.railway.app/health` — should still return 200 with `{"ok":true,...}` even if testnut.cashu.space is having a moment.
 2. **Run smoke against Railway.** `$env:SMOKE_BASE_URL = "https://safe-sales-backend-production.up.railway.app"; npm run smoke` — expect 8/8.
-3. **Flip Resend to production sender.** On Railway dashboard:
+3. **Verify CORS preflight from the Vercel frontend works.** Run:
+   ```powershell
+   $r = Invoke-WebRequest -Uri "https://safe-sales-backend-production.up.railway.app/api/orders/foo/confirm-payment" -Method OPTIONS -Headers @{"Origin"="https://YOUR-VERCEL-URL.vercel.app"; "Access-Control-Request-Method"="POST"; "Access-Control-Request-Headers"="content-type"} -UseBasicParsing
+   $r.Headers['Access-Control-Allow-Origin']  # should echo the Origin header value
+   ```
+4. **Flip Resend to production sender.** On Railway dashboard:
    - Confirm `shopke.org` is **Verified** in the Resend dashboard first (Cloudflare DNS propagation).
    - Set `RESEND_FROM_EMAIL = SafeSale <orders@shopke.org>`.
    - Delete `RESEND_TEST_TO_EMAIL` (only used in dev).
-4. **Click "Confirm Payment (Demo)" on the live frontend** with a real buyer email. Expect: 200 response, "Payment confirmed ✓" toast, real email from `orders@shopke.org` in the inbox, order page advances to "Payment locked".
-5. If the 500 reappears, check Railway logs for the specific `error.code` (now sharpened — should be `CASHU_MINT_UNAVAILABLE`, `BAD_REQUEST`, `CONFLICT`, etc., not the generic `INTERNAL_SERVER_ERROR`).
+5. **Click "Confirm Payment (Demo)" on the live frontend** with a real buyer email. Expect: 200 response, "Payment confirmed ✓" toast, real email from `orders@shopke.org` in the inbox, order page advances to "Payment locked".
+6. If anything still fails, check Railway logs for either the specific `error.code` (now sharpened) or a `CORS rejected request — origin not in allowlist` warn line that pinpoints the unallowed origin.
 
 ### Phase 8 (the bigger picture) — Frontend integration with partner's code
 

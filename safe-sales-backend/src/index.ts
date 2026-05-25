@@ -26,9 +26,31 @@ async function buildServer() {
     trustProxy: true, // Railway sits behind a proxy
   });
 
-  // CORS — allow the frontend (Vite dev on :8080, plus prod origin once deployed)
+  // CORS — allow the configured exact frontend origins (Vite dev :8080
+  // by default) plus any origin matching FRONTEND_ORIGIN_REGEXES. The
+  // default regex matches any *.vercel.app subdomain so Vercel preview
+  // deploys "just work" without a backend redeploy per PR.
+  //
+  // origin can be a function: (origin, cb) => cb(err, allow). Returning
+  // true echoes the origin into Access-Control-Allow-Origin; returning
+  // false sends no ACAO header (browser blocks the request).
   await app.register(cors, {
-    origin: env.FRONTEND_ORIGINS,
+    origin: (origin, cb) => {
+      // Same-origin / curl / server-to-server requests have no Origin
+      // header. Always allow — there's no CORS to enforce.
+      if (!origin) return cb(null, true);
+
+      if (env.FRONTEND_ORIGINS.includes(origin)) return cb(null, true);
+      if (env.FRONTEND_ORIGIN_REGEXES.some((re) => re.test(origin))) {
+        return cb(null, true);
+      }
+
+      logger.warn(
+        { origin, allowedOrigins: env.FRONTEND_ORIGINS },
+        'CORS rejected request — origin not in allowlist',
+      );
+      return cb(null, false);
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   });

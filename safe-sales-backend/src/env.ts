@@ -21,6 +21,23 @@ const EnvSchema = z.object({
     .string()
     .default('http://localhost:8080')
     .transform((s) => s.split(',').map((o) => o.trim()).filter(Boolean)),
+  // Comma-separated regex patterns matched against the request Origin.
+  // Useful for Vercel/Netlify preview deploys where every PR gets a fresh
+  // hostname. Default allows every *.vercel.app subdomain — safe because
+  // browsers only send the Origin header for cross-origin requests, and
+  // an attacker controlling a *.vercel.app deploy still can't read a
+  // logged-in user's cookies (we set credentials: true but don't issue
+  // session cookies anyway — auth is via orderToken in the URL).
+  FRONTEND_ORIGIN_REGEXES: z
+    .string()
+    .default('^https://([a-z0-9-]+\\.)*vercel\\.app$')
+    .transform((s) =>
+      s
+        .split(',')
+        .map((p) => p.trim())
+        .filter(Boolean)
+        .map((p) => new RegExp(p)),
+    ),
   FRONTEND_APP_URL: z
     .string()
     .default('http://localhost:8080')
