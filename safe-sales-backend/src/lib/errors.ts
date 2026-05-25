@@ -59,6 +59,28 @@ export class UnprocessableEntity extends HttpError {
 }
 
 /**
+ * 503 — a dependency we need (Cashu mint, Resend, etc.) is unreachable
+ * or behaving incorrectly. Distinct from 500 so the frontend (and Railway
+ * logs) can tell "we broke" from "an upstream broke".
+ */
+export class ServiceUnavailable extends HttpError {
+  constructor(message: string, details?: unknown) {
+    super(503, 'SERVICE_UNAVAILABLE', message, details);
+  }
+}
+
+/**
+ * 503 specifically because the Cashu mint failed. Distinct code so the
+ * frontend can show a "mint busy, retry in a moment" message rather than
+ * the generic "something broke".
+ */
+export class CashuMintUnavailable extends HttpError {
+  constructor(message: string, details?: unknown) {
+    super(503, 'CASHU_MINT_UNAVAILABLE', message, details);
+  }
+}
+
+/**
  * Crypto-safe random short-id for orders. Format: "SS-XXXX" (4 base32 chars).
  */
 export function generateShortId(): string {

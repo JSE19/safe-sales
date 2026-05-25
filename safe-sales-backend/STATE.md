@@ -2,7 +2,7 @@
 
 > **READ THIS FIRST** at the start of every session. Skim it top-to-bottom in ~2 minutes and you'll have full context on what we're building, what's done, what's next, and the rules we work under.
 
-Last updated: 2026-05-22 after Phase 7 completion (Railway deploy live + smoke 8/8 green).
+Last updated: 2026-05-25 after Phase 7.5 (demo-friendly payment confirmation + Resend email + boot-resilience fix).
 
 ---
 
@@ -84,6 +84,7 @@ ESM (`"type": "module"`). NodeNext module resolution. Strict tsconfig (`noUnused
 | 6 | Real Cashu mint + NUT-11 P2PK lock/redeem; Nostr DMs to seller (payment locked) and buyer (shipped); LNURL-pay resolver | ✅ end-to-end live test: wrong key 400, correct key redeems 9444 sats |
 | 6.5 | Committed smoke test (`npm run smoke`, `scripts/smoke.ts`) — full 8-step end-to-end verification, parameterized by `SMOKE_BASE_URL` for both local + Railway | ✅ 8/8 green locally on every run |
 | 7 | Deploy to Railway with public URL, all env vars set, `/health` serving over HTTPS, `npm run smoke` against the public URL passes 8/8 | ✅ live at `https://safe-sales-backend-production.up.railway.app` |
+| 7.5 | Demo-friendly payment confirmation: `/api/orders/:token/confirm-payment` (frontend Demo button), demo Cashu fallback for when the public mint is down, Resend buyer-email integration, boot-resilience + bounded mint timeouts | ✅ committed; smoke 8/8 still green; awaiting Railway env-var swap to `orders@shopke.org` |
 
 **Trustless guarantee proven on Railway production** (2026-05-22 04:36 UTC):
 - Wrong-key release: `400 BAD_REQUEST "Cashu redeem failed: Witness is missing for p2pk signature"`
@@ -122,6 +123,56 @@ The first Railway deploy succeeded but the smoke failed at Step 6/7 with `"Order
 
 ---
 
+## Phase 7.5 — demo-friendly payment confirmation + Resend + boot resilience
+
+This bundle was added after the original Phase 7 deploy to make the system demo-able from the frontend without depending on Bitnob (sandbox hasn't approved us yet) and to make the backend survive the public Cashu mint having a bad day.
+
+### What was added
+
+| File | Change |
+|---|---|
+| `src/routes/orders.ts` | **NEW route** `POST /api/orders/:token/confirm-payment` — invokes `markOrderPaymentLocked(..., { allowDemoCashuFallback: true })`. Used by the frontend's "Confirm Payment (Demo)" button on `/checkout` while Bitnob is mocked. Always 200 with `{ ok, orderId, status }`. |
+| `src/services/cashu.ts` | **NEW** `createDemoLockedToken()` / `readDemoLockedToken()` — opaque `safesale_demo_cashu_v1:<base64url>` token used as a fallback when the real Cashu mint is unreachable. On release, `redeemLockedToken()` detects the prefix, verifies the buyer's private key derives the recorded pubkey, and returns the recorded sat amount without contacting the mint. **Trustless on the SafeSale-vs-buyer axis (key match required); not trustless on the mint axis** (no real mint backing). Acceptable for the demo while Bitnob is mocked; documented as a fallback only. |
+| `src/services/email.ts` | **NEW** Resend integration — `sendBuyerOrderLinkEmail()` sends the buyer an HTML email with their `/order/:token` link after payment locks. Best-effort: any failure inside the function is `logger.warn`'d and swallowed (escrow state never depends on email). Has a smart `@resend.dev` dev-mode redirect to `RESEND_TEST_TO_EMAIL` since Resend's shared sandbox sender can only email the verified Resend account owner. |
+| `src/routes/webhooks.ts` | `markOrderPaymentLocked()` got the demo-fallback path (only when `allowDemoCashuFallback: true`), email send wired in, and (Phase 7.5 fix) the email call is now wrapped in try/catch so an email throw can never roll back a successful escrow state change. |
+| `src/lib/errors.ts` | Added `CashuMintUnavailable` (503, code `CASHU_MINT_UNAVAILABLE`) and generic `ServiceUnavailable` (503) classes. Webhook now throws `CashuMintUnavailable` instead of a bare `Error` so the frontend can branch on `body.error.code` and the response status is 503 (correct for upstream-down) rather than 500 (which implies "we broke"). |
+| `src/index.ts` | **Boot resilience.** Previously: `verifyMintCapabilities()` ran before `app.listen()` and `process.exit(1)`'d on any failure. A flaky `testnut.cashu.space` could therefore kill the whole Railway container. Now: server binds the port first; mint check runs in the background; failure logs at `error` level but does NOT exit. Per-request mint failures still surface the right 503 to the caller (via `CashuMintUnavailable` or the demo-fallback path). |
+| `src/services/cashu.ts` | `verifyMintCapabilities()` is now bounded by a 10s `Promise.race` timeout so a hung mint can't block the background check forever. |
+| `railway.json` | `healthcheckTimeout` 30 → 90 — belt-and-suspenders so a slow first Prisma migrate or cold container has breathing room. |
+| `.env.example` | Documented the Resend production sender pattern (`SafeSale <orders@shopke.org>`) and noted that `RESEND_TEST_TO_EMAIL` should be unset in production. |
+
+### The Phase 7.5 bug hunt
+
+User reported a 500 from `/api/orders/:token/confirm-payment` on Railway. First guess (process killed at boot due to mint check) was wrong — fresh Railway logs showed the container booting cleanly:
+
+```
+Cashu mint verified — NUT-11 supported
+SafeSale backend listening (address: http://127.0.0.1:8080, env: production)
+incoming request GET /health  →  200 in 5ms
+```
+
+Code re-read showed `markOrderPaymentLocked` had the email send unwrapped, and a bare `throw new Error('Cashu mint failed: ...')` falling through to the 500 generic handler. Without a reproducer log line, we couldn't pin the exact throw — but ALL of:
+
+1. Unwrapped `sendBuyerOrderLinkEmail` (would 500 if Resend rejected),
+2. Bare `Error` instead of typed 503 (would 500 if mint failed without fallback),
+3. Boot-killing `process.exit(1)` on mint check (would 502 from Railway, not 500, but would mimic the same UX),
+
+…are real bugs. They are now all fixed. If the 500 reappears, the new logs will surface a specific `error.code` (`CASHU_MINT_UNAVAILABLE`, etc.) pointing at the real culprit.
+
+### Trust-model note on the demo Cashu fallback
+
+The demo token preserves **buyer-vs-platform** trustlessness:
+- Release requires the buyer's private key, verified by deriving the pubkey and comparing to the one recorded in the token. Wrong key → 400.
+- The token cannot be forged by the platform without knowing the buyer's secret.
+
+It does NOT preserve **mint-backed** trustlessness:
+- No real Cashu mint holds proofs; there's no on-chain or Lightning settlement.
+- This is acceptable for the demo because Bitnob is also mocked — no real NGN ever moves either.
+
+When both Bitnob AND the Cashu mint are healthy on mainnet (Phase 9+), the demo fallback should be removed or explicitly disabled on the production deploy.
+
+---
+
 ## Key decisions made (don't re-litigate)
 
 | Decision | Why |
@@ -135,6 +186,9 @@ The first Railway deploy succeeded but the smoke failed at Step 6/7 with `"Order
 | **No frontend changes from backend side** | Partner owns `safe-sales/`. Backend exposes typed JSON; frontend wires up when ready. |
 | **`"type": "module"` (ESM)** | Matches frontend. Modern Node default. |
 | **TypeScript 5.6, Prisma 6.x pinned** | Latest 6.x and 7.x respectively had known issues; pinned to stable. |
+| **Demo Cashu fallback opt-in via `allowDemoCashuFallback`** | Real Bitnob webhook fails closed (503) when the mint is down — Bitnob retries. Demo frontend button opts in to the fallback so the demo never gets stuck. Documented in Phase 7.5 above. |
+| **Resend for buyer email, best-effort** | Email is never on the critical path. The order link is visible in-app; email is convenience. Service swallows its own failures via `logger.warn`. Caller now wraps it in try/catch as a second line of defense. |
+| **Boot does NOT block on mint check** | Original behavior killed the container on transient mint failures. New behavior boots the server first, runs mint check in background, lets per-request mint failures surface as 503 with a specific code. |
 
 ---
 
@@ -149,6 +203,13 @@ The user's local `.env` has the real values. Don't echo them. Required for the s
 - `SAFESALE_FEE_LN_ADDRESS` — `egbalajoy@coinos.io` (mainnet LN address; not called until Phase 9 wires fee melt)
 - `NOSTR_RELAYS` — `wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net`
 - `BITNOB_*` — left empty; mocked for MVP
+
+### Resend (email) env vars
+
+- `RESEND_API_KEY` — set on Railway with your real key (`re_...`).
+- `RESEND_FROM_EMAIL` — **production** should be `SafeSale <orders@shopke.org>` (domain `shopke.org` is being verified in Resend, DNS on Cloudflare). Default of `SafeSale <onboarding@resend.dev>` is a shared sandbox sender that **only emails the verified Resend account owner** and is rate-limited.
+- `RESEND_TEST_TO_EMAIL` — only used in dev when `RESEND_FROM_EMAIL` contains `@resend.dev`. Leave unset on Railway in production.
+- **Before flipping `RESEND_FROM_EMAIL` on Railway**, confirm `shopke.org` shows the green "Verified" badge in the Resend dashboard. Until then it will fail with a 403, which is now safely swallowed by the email service (order still completes) but no email goes out.
 
 ### Railway-specific notes
 
@@ -175,7 +236,8 @@ The user's local `.env` has the real values. Don't echo them. Required for the s
 | `POST` | `/api/orders/:token/ship` | Mark shipped, start 7-day auto-release timer, DM buyer |
 | `POST` | `/api/orders/:token/release` | **Buyer-signed Cashu redeem.** Body: `{ buyerPrivateKeyHex }`. Returns `{ order, redeemedSats, txRef }`. |
 | `POST` | `/api/orders/:token/dispute` | Open dispute, freeze token, start 72h direct-resolution window |
-| `POST` | `/api/webhooks/bitnob` | Bitnob credit notification (mocked) — triggers Cashu mint + lock + seller DM |
+| `POST` | `/api/orders/:token/confirm-payment` | **Demo-only.** Frontend's "Confirm Payment (Demo)" button. Same code path as the real webhook, but with `allowDemoCashuFallback: true` so a flaky public mint doesn't block the demo. Use while Bitnob is mocked. |
+| `POST` | `/api/webhooks/bitnob` | Bitnob credit notification (mocked) — triggers Cashu mint + lock + seller DM. Returns 503 `CASHU_MINT_UNAVAILABLE` if the mint is down (so Bitnob retries per its own policy). |
 | `POST` | `/api/dev/simulate-payment` | Dev-only — invokes the same Cashu mint+lock+DM path. **404s in production.** |
 
 Error envelope: `{ "error": { "code": "...", "message": "...", "details": ... } }`
@@ -200,8 +262,13 @@ The frontend already has all these pages — they just call mock functions. Wiri
 ## Git state at last session end
 
 - **Local branch:** `backend`
-- **Tracking:** `origin/backend` — fully pushed (no unpushed commits)
+- **Tracking:** `origin/backend`
 - **Recent commits (most recent first):**
+  - `(pending)` fix(backend): boot-resilient mint check, typed 503 for mint failures, defensive email try/catch, healthcheckTimeout 90s, Resend domain docs, STATE.md refresh
+  - `a7f4a1d` Cashew Mint Check (demo-token fallback + confirm-payment route)
+  - `5fcda46` Send Mail Resend
+  - `9399a9b` Send Mail containing link
+  - `4628e76` docs(state): Phase 7 complete - Railway live, smoke 8/8 green
   - `e0ded14` fix(deploy): pin Node 22, pin cashu-ts 2.9.0, add keyset diagnostic log
   - `35cfb50` fix(cashu): stop swallowing mint errors; longer Railway-friendly timeout
   - `e82664c` fix(deploy): move @types/node, tsx, typescript to dependencies
@@ -218,21 +285,38 @@ The frontend already has all these pages — they just call mock functions. Wiri
 
 ---
 
-## What's NEXT (Phase 8 — awaiting user approval)
+## What's NEXT (Phase 8 — IN-FLIGHT)
 
-Phase 7 (Railway deploy) is **done and verified**. The hackathon trajectory from here:
+Phase 7.5 is **done locally**, awaiting user's `git push` and Railway redeploy. Once pushed:
 
-### Phase 8 (next) — Frontend integration with partner's code
-The partner's frontend at `safe-sales/` currently reads from `src/lib/mock.ts`. Hand them:
+### Immediate post-push checklist
+
+1. **Verify Railway deploy.** Hit `https://safe-sales-backend-production.up.railway.app/health` — should still return 200 with `{"ok":true,...}` even if testnut.cashu.space is having a moment.
+2. **Run smoke against Railway.** `$env:SMOKE_BASE_URL = "https://safe-sales-backend-production.up.railway.app"; npm run smoke` — expect 8/8.
+3. **Flip Resend to production sender.** On Railway dashboard:
+   - Confirm `shopke.org` is **Verified** in the Resend dashboard first (Cloudflare DNS propagation).
+   - Set `RESEND_FROM_EMAIL = SafeSale <orders@shopke.org>`.
+   - Delete `RESEND_TEST_TO_EMAIL` (only used in dev).
+4. **Click "Confirm Payment (Demo)" on the live frontend** with a real buyer email. Expect: 200 response, "Payment confirmed ✓" toast, real email from `orders@shopke.org` in the inbox, order page advances to "Payment locked".
+5. If the 500 reappears, check Railway logs for the specific `error.code` (now sharpened — should be `CASHU_MINT_UNAVAILABLE`, `BAD_REQUEST`, `CONFLICT`, etc., not the generic `INTERNAL_SERVER_ERROR`).
+
+### Phase 8 (the bigger picture) — Frontend integration with partner's code
+
+The partner's frontend at `safe-sales/` is partially wired (the Confirm Payment Demo button exists). To complete:
 1. **API base URL:** `https://safe-sales-backend-production.up.railway.app`
-2. **Frontend `.env` change:** `VITE_API_BASE=https://safe-sales-backend-production.up.railway.app`
-3. **Once their prod frontend URL exists** (Vercel/Netlify), add it to the backend's `FRONTEND_ORIGINS` env var on Railway. Currently allows `http://localhost:8080,http://localhost:5173` for partner's dev work.
+2. **Frontend `.env` change:** `VITE_API_URL=https://safe-sales-backend-production.up.railway.app` (current code reads `VITE_API_URL` per `safe-sales/safesale-frontend/src/pages/Checkout.tsx:839`).
+3. **Once their prod frontend URL exists** (Vercel/Netlify), add it to the backend's `FRONTEND_ORIGINS` env var on Railway.
 
-Backend side of Phase 8 = CORS debugging, response-shape fixes, occasional pair-debugging. The 13 API routes are the contract; see "API surface" section above.
+Backend side of Phase 8 = CORS debugging, response-shape fixes, occasional pair-debugging. The 14 API routes are the contract; see "API surface" section above.
+
+### Optional message to forward to the frontend dev
+
+> Once the new backend is deployed, the `Confirm Payment (Demo)` button at `Checkout.tsx:838-885` will get a 503 with `body.error.code === "CASHU_MINT_UNAVAILABLE"` if the mint is genuinely down (instead of a generic 500). The current `res.status >= 500` retry already covers 503, so no urgent change. But it would be nicer UX to branch on the error code and show specific copy for mint-unavailable vs. unknown errors.
 
 ### Phase 9+ (post-MVP, possibly post-hackathon)
 - Real Lightning melt on release (99% to seller, 1% to `SAFESALE_FEE_LN_ADDRESS=egbalajoy@coinos.io`) — the comments in `src/routes/escrow.ts:112` mark the exact spot
-- Bitnob sandbox integration when API key arrives
+- Bitnob sandbox integration when API key arrives (still waiting; user followed up, may hear back tomorrow)
+- Remove or disable the demo Cashu fallback on mainnet (`allowDemoCashuFallback` flag)
 - NIP-32 review event publication on completion (helpers exist in `src/services/nostr.ts`)
 - Admin dispute resolution UI wiring
 - 7-day silent-buyer auto-release background job (cron-like)
@@ -300,11 +384,11 @@ $env:SMOKE_BASE_URL = "https://safe-sales-backend-production.up.railway.app"; np
 
 These will need answers to make smart progress on Phase 8+:
 
-1. **Phase 8 (frontend wiring) approval?** Or pause longer?
-2. **Has the partner started wiring the frontend** to the live Railway API? If yes, what works/breaks? Have they set `VITE_API_BASE=https://safe-sales-backend-production.up.railway.app`?
-3. **Partner's frontend deployment URL** (Vercel/Netlify/etc.) — needed to add to `FRONTEND_ORIGINS` on Railway so CORS allows it
-4. **Any Bitnob sandbox response** from the email sent earlier?
-5. **Anything from the demo trial** that surfaced UX issues?
+1. **Did the Railway redeploy fix the 500?** After pushing Phase 7.5 and clicking Confirm Payment Demo on the live frontend — what's the response now?
+2. **Is `shopke.org` Verified in Resend yet?** Cloudflare DNS may take a few hours. Until it's green, `RESEND_FROM_EMAIL=SafeSale <orders@shopke.org>` will fail (gracefully now — escrow still completes, email is just skipped with a warn log).
+3. **Bitnob sandbox response** — user followed up; reply expected tomorrow.
+4. **Partner's frontend deployment URL** (Vercel/Netlify/etc.) — needed to add to `FRONTEND_ORIGINS` on Railway so CORS allows it.
+5. **Any UX issues from the demo trial** that surfaced new bugs?
 
 ---
 

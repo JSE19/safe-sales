@@ -100,16 +100,13 @@ async function buildServer() {
 }
 
 async function start() {
-  // Verify external dependencies before opening the port. We DO check the
-  // Cashu mint (without it the entire escrow primitive fails); we DON'T
-  // check Nostr relays or LN endpoints (best-effort, won't block startup).
-  try {
-    await verifyMintCapabilities();
-  } catch (err) {
-    logger.fatal({ err: err instanceof Error ? err.message : err }, 'Cashu mint check failed');
-    process.exit(1);
-  }
-
+  // Bind the port FIRST so Railway's healthcheck succeeds even if external
+  // dependencies are slow or down. The original behavior was to verify the
+  // Cashu mint before listening and `process.exit(1)` on failure — that
+  // converted a transient public-mint hiccup into total downtime. We now
+  // verify in the background, log loudly on failure, and let the per-request
+  // mint calls (which already catch and either fall back or surface a 503)
+  // do the right thing on a per-route basis.
   const app = await buildServer();
 
   try {
@@ -122,6 +119,16 @@ async function start() {
     logger.fatal(err, 'Failed to start server');
     process.exit(1);
   }
+
+  // Background mint check — fire-and-forget. Logs at info/error level so
+  // we can tell from the Railway dashboard whether the mint is healthy
+  // without the boot sequence depending on it.
+  verifyMintCapabilities().catch((err) => {
+    logger.error(
+      { err: err instanceof Error ? err.message : err, mint: env.CASHU_MINT_URL },
+      'Cashu mint check failed — server is up, but mint-dependent routes will fail or fall back to demo tokens. Investigate the mint.',
+    );
+  });
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {

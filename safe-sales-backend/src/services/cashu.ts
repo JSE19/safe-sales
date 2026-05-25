@@ -53,10 +53,22 @@ function getMint(): CashuMint {
  * One-time mint capability check. Called at server boot. Fails loudly if
  * the configured mint doesn't support NUT-11 (P2PK) — without it,
  * SafeSale's entire trust model breaks.
+ *
+ * Bounded by a 10s timeout so a hung public mint can't block the boot
+ * sequence indefinitely. Railway healthcheck is 30s; we must respond
+ * well before that.
  */
 export async function verifyMintCapabilities(): Promise<void> {
   const mint = getMint();
-  const info = await mint.getInfo();
+  const info = await Promise.race([
+    mint.getInfo(),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Mint ${env.CASHU_MINT_URL} did not respond within 10s`)),
+        10_000,
+      ),
+    ),
+  ]);
   const nuts = info.nuts ?? {};
   const hasP2PK = Boolean(
     // cashu-ts normalises both '11' (key) and 'nut11' formats across versions
