@@ -421,6 +421,7 @@ export default function Checkout() {
                 hasAccount={!!createdOrder}
                 onIssueAccount={handleIssueAccount}
                 error={createError}
+                orderToken={createdOrder?.orderToken}
               />
             )}
             {step === "waiting" && (
@@ -703,6 +704,7 @@ function Instructions({
   hasAccount,
   onIssueAccount,
   error,
+  orderToken,
 }: {
   amount: number;
   bitnob: {
@@ -719,6 +721,7 @@ function Instructions({
   /** Issue the virtual account by calling createOrder. */
   onIssueAccount: () => void;
   error: string | null;
+  orderToken?: string;
 }) {
   const { toast } = useToast();
   const copy = (s: string) => {
@@ -828,6 +831,59 @@ function Instructions({
           <>I've sent the transfer</>
         )}
       </Button>
+      {orderToken && (
+        <Button
+          size="lg"
+          variant="outline"
+          onClick={async () => {
+            const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+            const url = `${apiBase}/api/orders/${orderToken}/confirm-payment`;
+            const maxRetries = 3;
+            let lastError = "";
+
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+              try {
+                toast({
+                  title: attempt === 1
+                    ? "Confirming payment…"
+                    : `Retrying… (attempt ${attempt}/${maxRetries})`,
+                });
+                const res = await fetch(url, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                });
+                if (!res.ok) {
+                  const body = await res.json().catch(() => ({}));
+                  lastError = body?.error?.message || body?.message || `HTTP ${res.status}`;
+                  // If it's a 500 (server/Cashu error), retry; otherwise break
+                  if (res.status >= 500 && attempt < maxRetries) {
+                    await new Promise((r) => setTimeout(r, 2000));
+                    continue;
+                  }
+                  throw new Error(lastError);
+                }
+                toast({ title: "Payment confirmed ✓" });
+                onConfirm();
+                return;
+              } catch (err) {
+                lastError = err instanceof Error ? err.message : "Unknown error";
+                if (attempt < maxRetries) {
+                  await new Promise((r) => setTimeout(r, 2000));
+                  continue;
+                }
+              }
+            }
+            toast({
+              title: "Payment confirmation failed",
+              description: `${lastError}. The Cashu mint may be busy — try again in a moment.`,
+              variant: "destructive",
+            });
+          }}
+          className="mt-2 h-12 w-full rounded-lg text-base font-semibold border-brand text-brand hover:bg-brand/10"
+        >
+          Confirm Payment (Demo)
+        </Button>
+      )}
       <p className="mt-2 text-center text-[11px] text-ink-soft">
         We usually detect bank transfers within 60 seconds.
       </p>
@@ -958,19 +1014,19 @@ function Secured({
           </div>
         </div>
 
-        <div className="mt-4 flex items-stretch rounded-lg border border-amber-200 bg-white">
-          <div className="flex flex-1 items-center gap-2 truncate px-3 font-mono text-xs text-ink">
+        <div className="mt-4 flex flex-col sm:flex-row items-stretch sm:items-center rounded-lg border border-amber-200 bg-white overflow-hidden">
+          <div className="flex flex-1 items-center gap-2 px-3 py-2.5 font-mono text-xs text-ink min-w-0 break-all">
             <LinkIcon className="h-3.5 w-3.5 shrink-0 text-ink-soft" />
-            <span className="truncate">{orderLink}</span>
+            <span className="break-all select-all">{orderLink}</span>
           </div>
           <button
             onClick={() => {
               navigator.clipboard?.writeText(orderLink);
               toast({ title: "Order link copied" });
             }}
-            className="inline-flex items-center gap-1 border-l border-amber-200 px-3 text-xs font-medium text-amber-800 hover:bg-amber-100/60"
+            className="inline-flex items-center justify-center gap-1 border-t sm:border-t-0 sm:border-l border-amber-200 px-4 py-2.5 sm:py-0 text-xs font-semibold text-amber-800 hover:bg-amber-100/60 transition-colors bg-amber-50/40 sm:bg-transparent shrink-0"
           >
-            <Copy className="h-3.5 w-3.5" /> Copy
+            <Copy className="h-3.5 w-3.5" /> Copy Link
           </button>
         </div>
 

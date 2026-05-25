@@ -133,6 +133,12 @@ function OpenShopForm() {
   const [phone, setPhone] = useState("");
   const [isCreating, setIsCreating] = useState(false);
 
+  // Key backup dialog state
+  const [showKeyBackup, setShowKeyBackup] = useState(false);
+  const [generatedNsec, setGeneratedNsec] = useState("");
+  const [keyRevealed, setKeyRevealed] = useState(false);
+  const [keyCopied, setKeyCopied] = useState(false);
+
   const loginActions = useLoginActions();
   const { logins, removeLogin } = useNostrLogin();
   const [, setCurrentSeller] = useCurrentSeller();
@@ -202,14 +208,11 @@ function OpenShopForm() {
         createdAt: seller.createdAt,
       });
 
-      // TODO: publish kind 0 profile metadata { name: shopName, ... } and
-      // persist the handle as a NIP-05-style identifier once the backend
-      // handle registry is live.
-      toast({
-        title: "Shop created",
-        description: `Welcome, @${seller.handle}.`,
-      });
-      navigate("/app");
+      // Show the key backup dialog BEFORE navigating to /app.
+      // The user must see their nsec at least once.
+      setGeneratedNsec(nsec);
+      setShowKeyBackup(true);
+      setIsCreating(false);
     } catch (err) {
       setIsCreating(false);
       toast({
@@ -217,6 +220,23 @@ function OpenShopForm() {
         description: friendlySellerError(err),
         variant: "destructive",
       });
+    }
+  };
+
+  const copyNsec = async () => {
+    try {
+      await navigator.clipboard.writeText(generatedNsec);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 3000);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = generatedNsec;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+      setKeyCopied(true);
+      setTimeout(() => setKeyCopied(false), 3000);
     }
   };
 
@@ -254,6 +274,78 @@ function OpenShopForm() {
           "Create my shop"
         )}
       </Button>
+
+      {/* ---- Key Backup Dialog ---- */}
+      <Dialog open={showKeyBackup} onOpenChange={() => { /* prevent close by clicking outside */ }}>
+        <DialogContent className="sm:max-w-md [&>button]:hidden" onPointerDownOutside={(e) => e.preventDefault()}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Lock className="h-5 w-5 text-brand" />
+              Save your secret key
+            </DialogTitle>
+            <DialogDescription>
+              This is the <strong>only way</strong> to log back into your shop if you
+              clear your browser data or switch devices. Copy it and store it somewhere
+              safe — we can never recover it for you.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <Label className="text-xs font-semibold text-amber-900">Your nsec (private key)</Label>
+              <div className="mt-2 flex items-center gap-2">
+                <code className="flex-1 overflow-hidden break-all rounded-lg border border-amber-200 bg-white px-3 py-2 font-mono text-xs text-ink select-all">
+                  {keyRevealed ? generatedNsec : generatedNsec.substring(0, 12) + "••••••••••••••••••••••"}
+                </code>
+              </div>
+              <div className="mt-2 flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={() => setKeyRevealed(!keyRevealed)}
+                >
+                  {keyRevealed ? <><EyeOff className="mr-1.5 h-3 w-3" /> Hide</> : <><Eye className="mr-1.5 h-3 w-3" /> Reveal</>}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={`h-8 text-xs ${keyCopied ? "border-green-300 bg-green-50 text-green-800" : ""}`}
+                  onClick={copyNsec}
+                >
+                  {keyCopied ? <><Check className="mr-1.5 h-3 w-3" /> Copied!</> : "Copy key"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+              <strong>⚠️ Warning:</strong> If you lose this key, you lose access to your shop forever.
+              SafeSale cannot reset or recover it — that's how Nostr privacy works.
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              className="w-full bg-brand text-brand-foreground hover:bg-brand/90"
+              onClick={() => {
+                setShowKeyBackup(false);
+                toast({
+                  title: "Shop created",
+                  description: keyCopied
+                    ? "Key copied ✓ — you're all set!"
+                    : "Make sure you saved your key from the sidebar later!",
+                });
+                navigate("/app");
+              }}
+            >
+              {keyCopied ? "I've saved my key — continue" : "Continue to my shop"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
