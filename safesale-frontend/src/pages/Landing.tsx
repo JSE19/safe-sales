@@ -5,7 +5,6 @@ import { MarketingLayout } from "@/components/safesale/MarketingLayout";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/safesale/Avatar";
 import { StarRating } from "@/components/safesale/StarRating";
-import { ProductImage } from "@/components/safesale/ProductImage";
 import { EscrowStatusPill } from "@/components/safesale/EscrowStatus";
 import {
   ShieldCheck,
@@ -21,7 +20,6 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { InstagramIcon } from "@/components/safesale/BrandIcons";
-import { formatNGN } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 import { useCurrentUser } from "@/hooks/useCurrentUser";
@@ -93,15 +91,12 @@ function useCallToAction(): { to: string; label: string } {
  * The hero phone mockup + seller-reputation block both used to read
  * from `src/lib/mock.ts` — that file is being deleted before submission
  * and the showcase blocks render best as **labelled examples**, not as
- * a pretend real seller. Three small constants below give the preview
+ * a pretend real seller. Two small constants below give the preview
  * blocks the data they need without coupling to anything live.
+ *
+ * (The hero mockup is now self-contained — see the Hero component —
+ * so EXAMPLE_LISTING is no longer needed.)
  */
-
-const EXAMPLE_LISTING = {
-  title: "Vintage Denim Jacket — Ralph Lauren",
-  priceNGN: 28_500,
-  imageSeed: "vintage-denim-jacket",
-} as const;
 
 const EXAMPLE_SELLER = {
   name: "Amaka O.",

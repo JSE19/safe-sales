@@ -49,7 +49,6 @@ import {
   ChevronRight,
   Clock,
   AlertCircle,
-  Loader2,
 } from "lucide-react";
 import { cn, sanitizeUrl } from "@/lib/utils";
 

@@ -17,7 +17,7 @@ export function EscrowShield({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-emerald-200/60 bg-gradient-to-br from-brand-soft via-white to-brand-soft/60 p-5",
+        "relative overflow-hidden rounded-2xl border border-emerald-200/60 bg-gradient-to-br from-brand-soft via-white to-brand-soft/60 p-5 animate-slide-up transition-all duration-300 hover:shadow-md hover:scale-[1.005]",
         className
       )}
     >

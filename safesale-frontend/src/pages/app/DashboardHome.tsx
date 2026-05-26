@@ -328,6 +328,7 @@ function KpiGrid({
             : "Nothing in escrow right now"
         }
         loading={loading}
+        delayMs={100}
       />
       <KpiTile
         icon={Wallet}
@@ -339,6 +340,7 @@ function KpiGrid({
             : "No releases yet this week"
         }
         loading={loading}
+        delayMs={150}
       />
       <KpiTile
         icon={Truck}
@@ -353,6 +355,7 @@ function KpiGrid({
         }
         emphasizeSub={stats.ordersToShip > 0}
         loading={loading}
+        delayMs={200}
       />
       <KpiTile
         icon={Tag}
@@ -367,6 +370,7 @@ function KpiGrid({
           </Link>
         }
         loading={loading}
+        delayMs={250}
       />
     </div>
   );
@@ -379,6 +383,7 @@ function KpiTile({
   sub,
   loading,
   emphasizeSub,
+  delayMs,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
@@ -386,11 +391,15 @@ function KpiTile({
   sub: React.ReactNode;
   loading?: boolean;
   emphasizeSub?: boolean;
+  delayMs: number;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-white p-5">
+    <div 
+      className="rounded-2xl border border-border bg-white p-5 animate-slide-up transition-all duration-300 hover:scale-[1.02] hover:-translate-y-0.5 hover:shadow-md cursor-pointer hover:border-brand/20"
+      style={{ animationDelay: `${delayMs}ms` }}
+    >
       <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-ink-soft">
-        <Icon className="h-4 w-4" />
+        <Icon className="h-4 w-4 transition-transform duration-300 group-hover:scale-110" />
         {label}
       </div>
       <div className="mt-3 text-3xl font-semibold leading-none text-ink tabular-nums">
@@ -399,7 +408,7 @@ function KpiTile({
       <div
         className={cn(
           "mt-2 text-xs",
-          emphasizeSub ? "text-amber-700" : "text-ink-soft",
+          emphasizeSub ? "text-amber-700 font-medium" : "text-ink-soft",
         )}
       >
         {loading ? <Skeleton className="h-3 w-32" /> : sub}

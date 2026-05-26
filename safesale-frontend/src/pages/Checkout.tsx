@@ -836,10 +836,33 @@ function Instructions({
           size="lg"
           variant="outline"
           onClick={async () => {
-            const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+            // The demo "Confirm Payment" path hits a backend dev route
+            // (POST /api/orders/:token/confirm-payment) that isn't part
+            // of the typed apiClient surface. We talk to it directly,
+            // but we still use VITE_API_URL — and we fail loud when it
+            // isn't set, instead of silently falling back to localhost.
+            //
+            // Why: on Vercel previews/production a missing env var used
+            // to leave us calling `http://localhost:3000`, which (a) is
+            // the user's own machine, not the backend, and (b) is blocked
+            // outright by our CSP (`connect-src 'self' blob: https: wss:`
+            // disallows http://). The browser would reject the request
+            // before it ever left, and the catch-all below mislabelled
+            // it as "Cashu mint may be busy". Cost us a day of debugging.
+            const apiBase = import.meta.env.VITE_API_URL;
+            if (!apiBase) {
+              toast({
+                title: "App is misconfigured",
+                description:
+                  "VITE_API_URL is not set on this deployment. The site can't reach the SafeSale backend. Please contact support.",
+                variant: "destructive",
+              });
+              return;
+            }
             const url = `${apiBase}/api/orders/${orderToken}/confirm-payment`;
             const maxRetries = 3;
             let lastError = "";
+            let lastWasNetwork = false;
 
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
               try {
@@ -855,6 +878,7 @@ function Instructions({
                 if (!res.ok) {
                   const body = await res.json().catch(() => ({}));
                   lastError = body?.error?.message || body?.message || `HTTP ${res.status}`;
+                  lastWasNetwork = false;
                   // If it's a 500 (server/Cashu error), retry; otherwise break
                   if (res.status >= 500 && attempt < maxRetries) {
                     await new Promise((r) => setTimeout(r, 2000));
@@ -866,6 +890,10 @@ function Instructions({
                 onConfirm();
                 return;
               } catch (err) {
+                // A `fetch` that rejects (vs. resolves with !res.ok) is
+                // a network-layer failure: DNS, CORS, CSP, offline, TLS.
+                // Don't pretend it's a backend/mint problem.
+                lastWasNetwork = !(err instanceof Error && lastError === err.message);
                 lastError = err instanceof Error ? err.message : "Unknown error";
                 if (attempt < maxRetries) {
                   await new Promise((r) => setTimeout(r, 2000));
@@ -875,7 +903,9 @@ function Instructions({
             }
             toast({
               title: "Payment confirmation failed",
-              description: `${lastError}. The Cashu mint may be busy — try again in a moment.`,
+              description: lastWasNetwork
+                ? `Couldn't reach the SafeSale backend (${lastError}). Check your connection or try again shortly.`
+                : `${lastError}. The Cashu mint may be busy — try again in a moment.`,
               variant: "destructive",
             });
           }}
