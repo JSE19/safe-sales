@@ -860,8 +860,25 @@ function Instructions({
               return;
             }
             const url = `${apiBase}/api/orders/${orderToken}/confirm-payment`;
-            const maxRetries = 3;
+
+            // The Cashu testnut mint is a public test service and its
+            // first hit after idle frequently 500s with a generic
+            // "Something went wrong" envelope. A retry 2-3s later
+            // typically succeeds (the mint warms up). Empirical probing
+            // against Railway showed first-attempt 500 → second-attempt
+            // 200 in ~3s in the worst case, so we retry up to 5 times
+            // with backoff [2s, 4s, 6s, 8s] = up to ~20s total. The
+            // backend's confirm-payment handler is idempotent (returns
+            // the existing payment_locked order on a second hit) so a
+            // retry that races a slow first call is safe.
+            const maxRetries = 5;
+            const backoffMs = [2000, 4000, 6000, 8000];
             let lastError = "";
+            // `lastWasNetwork` distinguishes "fetch threw" (network /
+            // CSP / DNS / CORS — the request didn't make it to the
+            // server) from "fetch resolved with !res.ok" (we did reach
+            // the server, it returned an error envelope). The two need
+            // different user copy and we shouldn't mix them up again.
             let lastWasNetwork = false;
 
             for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -877,11 +894,18 @@ function Instructions({
                 });
                 if (!res.ok) {
                   const body = await res.json().catch(() => ({}));
-                  lastError = body?.error?.message || body?.message || `HTTP ${res.status}`;
+                  lastError =
+                    body?.error?.message ||
+                    body?.message ||
+                    `HTTP ${res.status}`;
                   lastWasNetwork = false;
-                  // If it's a 500 (server/Cashu error), retry; otherwise break
+                  // 5xx is almost always the Cashu mint being cold —
+                  // retry. 4xx means the request itself was bad
+                  // (e.g. order in wrong status); no point retrying.
                   if (res.status >= 500 && attempt < maxRetries) {
-                    await new Promise((r) => setTimeout(r, 2000));
+                    await new Promise((r) =>
+                      setTimeout(r, backoffMs[attempt - 1] ?? 8000),
+                    );
                     continue;
                   }
                   throw new Error(lastError);
@@ -890,13 +914,17 @@ function Instructions({
                 onConfirm();
                 return;
               } catch (err) {
-                // A `fetch` that rejects (vs. resolves with !res.ok) is
-                // a network-layer failure: DNS, CORS, CSP, offline, TLS.
+                // `fetch` rejecting (vs resolving with !res.ok) is
+                // network-layer: DNS, CORS, CSP, offline, TLS.
                 // Don't pretend it's a backend/mint problem.
-                lastWasNetwork = !(err instanceof Error && lastError === err.message);
+                lastWasNetwork = !(
+                  err instanceof Error && lastError === err.message
+                );
                 lastError = err instanceof Error ? err.message : "Unknown error";
                 if (attempt < maxRetries) {
-                  await new Promise((r) => setTimeout(r, 2000));
+                  await new Promise((r) =>
+                    setTimeout(r, backoffMs[attempt - 1] ?? 8000),
+                  );
                   continue;
                 }
               }
