@@ -440,18 +440,18 @@ function ListingCard({
   return (
     <div
       className={cn(
-        "group flex flex-col overflow-hidden rounded-2xl border bg-white transition-colors",
-        "border-border focus-within:border-brand hover:border-brand/60",
+        "group flex flex-col overflow-hidden rounded-2xl border bg-white transition-all duration-300 animate-slide-up hover:scale-[1.01] hover:-translate-y-0.5 hover:shadow-md",
+        "border-border focus-within:border-brand hover:border-brand/35",
       )}
     >
-      <div className="relative aspect-square overflow-hidden">
+      <div className="relative aspect-square overflow-hidden bg-surface">
         {cover ? (
           <img
             src={cover}
             alt=""
             loading="lazy"
             className={cn(
-              "h-full w-full object-cover",
+              "h-full w-full object-cover transition-transform duration-500 group-hover:scale-105",
               isOut && "opacity-80",
             )}
           />
