@@ -26,6 +26,14 @@ import { Lock } from "lucide-react";
  */
 export function MediatorGate({ children }: { children: React.ReactNode }) {
   const { user } = useCurrentUser();
+
+  // Demo mode: the mediator key isn't held by the frontend team, so for a
+  // judges' demo we open /admin directly. The whole app is on the mock in
+  // this mode — no real funds, no real backend — so there's nothing to gate.
+  if (import.meta.env.VITE_DEMO_MODE === "true") {
+    return <>{children}</>;
+  }
+
   const mediatorNpub = import.meta.env.VITE_MEDIATOR_NPUB?.trim();
   const expectedHex = decodeMediatorPubkey(mediatorNpub);
 

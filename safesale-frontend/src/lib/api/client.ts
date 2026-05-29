@@ -21,12 +21,15 @@ import type {
   CreateOrderResponse,
   CreateSellerRequest,
   CreateSellerResponse,
+  GetDisputesResponse,
   GetOrderResponse,
   GetSellerOrdersResponse,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,
   ReleaseOrderResponse,
+  ResolveDisputeRequest,
+  ResolveDisputeResponse,
   ShipOrderRequest,
   ShipOrderResponse,
 } from "./types";
@@ -54,6 +57,13 @@ export interface ApiClient {
   ): Promise<OpenDisputeResponse>;
   /** POST /api/orders/:token/ship — seller marks the order shipped. */
   shipOrder(token: string, req: ShipOrderRequest): Promise<ShipOrderResponse>;
+  /** GET /api/admin/disputes — mediator dispute queue (demo: served from mock store). */
+  getDisputes(): Promise<GetDisputesResponse>;
+  /** POST /api/admin/disputes/:id/resolve — mediator signs an outcome. */
+  resolveDispute(
+    orderToken: string,
+    req: ResolveDisputeRequest,
+  ): Promise<ResolveDisputeResponse>;
 }
 
 /** True when the real backend URL is configured. */
@@ -61,4 +71,15 @@ export const API_BACKEND_CONFIGURED: boolean =
   typeof import.meta.env.VITE_API_URL === "string" &&
   import.meta.env.VITE_API_URL.length > 0;
 
-export const apiClient: ApiClient = API_BACKEND_CONFIGURED ? httpApi : mockApi;
+/**
+ * Demo mode. When `VITE_DEMO_MODE=true`, every call is served by the
+ * in-memory mock client regardless of whether a backend URL is set — a
+ * single switch for a reliable judges' demo that never touches the flaky
+ * Cashu test mint. It also unlocks `/admin` (see MediatorGate) and seeds
+ * believable data. Set it back to `false` (or remove it) to use the real
+ * Railway backend.
+ */
+export const DEMO_MODE: boolean = import.meta.env.VITE_DEMO_MODE === "true";
+
+export const apiClient: ApiClient =
+  DEMO_MODE || !API_BACKEND_CONFIGURED ? mockApi : httpApi;

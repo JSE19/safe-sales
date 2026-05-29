@@ -1,7 +1,7 @@
 import { useSeoMeta } from "@unhead/react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Logo } from "@/components/safesale/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,13 @@ import { Countdown } from "@/components/safesale/Countdown";
 import { useListing } from "@/hooks/useListing";
 import { useAuthor } from "@/hooks/useAuthor";
 import { getSeller as getFixtureSeller } from "@/lib/mock";
-import { apiClient, ApiError, type ApiOrder } from "@/lib/api";
+import {
+  apiClient,
+  ApiError,
+  DEMO_MODE,
+  type ApiOrder,
+  type GetOrderResponse,
+} from "@/lib/api";
 import { formatNGN } from "@/lib/format";
 import { genUserName } from "@/lib/genUserName";
 import { useToast } from "@/hooks/useToast";
@@ -62,6 +68,7 @@ export default function Checkout() {
 
   const navigate = useNavigate();
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   useSeoMeta({
     title: listing ? `Checkout — ${listing.title}` : "Checkout — SafeSale",
@@ -102,14 +109,21 @@ export default function Checkout() {
   //
   // `apiClient.getOrder` returns the full `{order, listing, seller, dispute}`
   // envelope; for checkout we only care about `order.status`.
-  const { data: liveOrder } = useQuery<ApiOrder | null>({
+  // This query shares its key with the Buyer Order Page
+  // (`["safesale", "order", token]`), so it MUST return the same full
+  // `GetOrderResponse` envelope. If it returned only `order`, then when
+  // the buyer taps "Open my order page" the order page would read this
+  // cached value, find no `.listing` / `.seller`, and crash on
+  // `order.status` (the global staleTime keeps it from refetching to
+  // self-heal). Returning the envelope means the order page also opens
+  // with a warm, correct cache.
+  const { data: liveOrderEnv } = useQuery<GetOrderResponse | null>({
     queryKey: ["safesale", "order", createdOrder?.orderToken ?? ""],
     enabled: !!createdOrder?.orderToken,
     queryFn: async () => {
       if (!createdOrder) return null;
       try {
-        const env = await apiClient.getOrder(createdOrder.orderToken);
-        return env.order;
+        return await apiClient.getOrder(createdOrder.orderToken);
       } catch (err) {
         if (err instanceof ApiError && err.code === "ORDER_NOT_FOUND") {
           return null;
@@ -123,9 +137,10 @@ export default function Checkout() {
     refetchInterval: (q) => {
       const data = q.state.data;
       if (!data) return 2000;
-      return data.status === "pending_payment" ? 2000 : false;
+      return data.order.status === "pending_payment" ? 2000 : false;
     },
   });
+  const liveOrder = liveOrderEnv?.order ?? null;
 
   // While waiting, advance to "secured" automatically when the order
   // transitions out of pending_payment. We use refs to detect the edge
@@ -323,26 +338,106 @@ export default function Checkout() {
   };
 
   // ------------------------------------------------------------------
-  //  Confirm transfer sent — moves to the "waiting" step. From here the
-  //  polling effect drives the rest based on the order's status. In
-  //  mock mode the mock client transitions to payment_locked ~5s after
-  //  createOrder, so the buyer sees the lock animation play out.
+  //  Confirm transfer sent — moves to the "waiting" step, then locks the
+  //  payment in escrow.
+  //
+  //  Two modes:
+  //   - Mock mode (no VITE_API_URL): the mock client transitions the
+  //     order to payment_locked ~5s after createOrder on its own, so we
+  //     just show "waiting" and let the polling effect advance the UI.
+  //   - Real backend (VITE_API_URL set): Bitnob's bank rail is mocked, so
+  //     no webhook will ever fire to lock the payment. We trigger the lock
+  //     ourselves by calling POST /api/orders/:token/confirm-payment, which
+  //     mints the Cashu token and P2PK-locks it to the buyer. WITHOUT this
+  //     call the order sits in pending_payment forever and the buyer's
+  //     "I've sent the transfer" spinner never resolves.
+  //
+  //  confirm-payment is idempotent (a second hit returns the existing
+  //  payment_locked order), and the Cashu testnut mint occasionally 500s
+  //  on a cold first hit, so we retry up to 5 times with backoff.
   // ------------------------------------------------------------------
 
-  const handleConfirmTransferSent = () => {
+  const handleConfirmTransferSent = async () => {
     if (!createdOrder) return;
     setStep("waiting");
 
-    // Honest demo toast — the email/SMS provider integration is owned
-    // by the backend (Termii for SMS, Resend for email per BACKEND.md)
-    // and isn't wired yet. The order link IS shown on the Secured
-    // screen with copy + bookmark + screenshot prompts, which the PRD
-    // explicitly calls the primary delivery path. The toast just
-    // confirms the user's action landed.
+    const apiBase = import.meta.env.VITE_API_URL;
+
+    // Demo mock, OR no backend configured — there is nothing to POST to.
+    // The mock client auto-locks the order ~3s after createOrder and the
+    // polling effect advances waiting → detected → secured on its own.
+    //
+    // The demo-mode guard is essential: in demo mode VITE_API_URL may
+    // still point at the real Railway backend, but the order only exists
+    // in the in-memory mock. Firing /confirm-payment at the real backend
+    // with a mock-only token 404s and strands the buyer on "waiting".
+    if (DEMO_MODE || !apiBase) {
+      toast({
+        title: "Looking for your transfer…",
+        description: "Save your order link on the next screen — it's how you'll come back to this order.",
+      });
+      return;
+    }
+
+    const url = `${apiBase}/api/orders/${createdOrder.orderToken}/confirm-payment`;
+    const maxRetries = 5;
+    const backoffMs = [2000, 4000, 6000, 8000];
+    let lastError = "";
+    // Distinguishes "fetch threw" (network / CSP / DNS / CORS — the request
+    // never reached the server) from "server returned an error envelope".
+    let lastWasNetwork = false;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        toast({
+          title:
+            attempt === 1
+              ? "Confirming your payment…"
+              : `Still working… (attempt ${attempt}/${maxRetries})`,
+        });
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        });
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          lastError = body?.error?.message || body?.message || `HTTP ${res.status}`;
+          lastWasNetwork = false;
+          // 5xx is almost always the Cashu mint warming up — retry.
+          // 4xx means the request itself is bad (wrong status etc.) — don't.
+          if (res.status >= 500 && attempt < maxRetries) {
+            await new Promise((r) => setTimeout(r, backoffMs[attempt - 1] ?? 8000));
+            continue;
+          }
+          throw new Error(lastError);
+        }
+        // Locked. Nudge the polling query so the UI advances to
+        // detected → secured immediately instead of waiting for the tick.
+        toast({ title: "Payment confirmed ✓" });
+        await queryClient.invalidateQueries({
+          queryKey: ["safesale", "order", createdOrder.orderToken],
+        });
+        return;
+      } catch (err) {
+        lastWasNetwork = !(err instanceof Error && lastError === err.message);
+        lastError = err instanceof Error ? err.message : "Unknown error";
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, backoffMs[attempt - 1] ?? 8000));
+          continue;
+        }
+      }
+    }
+
+    // All retries exhausted — surface the failure and let the buyer retry
+    // from the instructions screen.
     toast({
-      title: "Looking for your transfer…",
-      description: "Save your order link on the next screen — it's how you'll come back to this order.",
+      title: "Payment confirmation failed",
+      description: lastWasNetwork
+        ? `Couldn't reach the SafeSale backend (${lastError}). Check your connection or try again shortly.`
+        : `${lastError}. The Cashu mint may be busy — try again in a moment.`,
+      variant: "destructive",
     });
+    setStep("instructions");
   };
 
   // The Bitnob account details come from the API response. In real mode
@@ -421,7 +516,6 @@ export default function Checkout() {
                 hasAccount={!!createdOrder}
                 onIssueAccount={handleIssueAccount}
                 error={createError}
-                orderToken={createdOrder?.orderToken}
               />
             )}
             {step === "waiting" && (
@@ -704,7 +798,6 @@ function Instructions({
   hasAccount,
   onIssueAccount,
   error,
-  orderToken,
 }: {
   amount: number;
   bitnob: {
@@ -721,7 +814,6 @@ function Instructions({
   /** Issue the virtual account by calling createOrder. */
   onIssueAccount: () => void;
   error: string | null;
-  orderToken?: string;
 }) {
   const { toast } = useToast();
   const copy = (s: string) => {
@@ -831,117 +923,6 @@ function Instructions({
           <>I've sent the transfer</>
         )}
       </Button>
-      {orderToken && (
-        <Button
-          size="lg"
-          variant="outline"
-          onClick={async () => {
-            // The demo "Confirm Payment" path hits a backend dev route
-            // (POST /api/orders/:token/confirm-payment) that isn't part
-            // of the typed apiClient surface. We talk to it directly,
-            // but we still use VITE_API_URL — and we fail loud when it
-            // isn't set, instead of silently falling back to localhost.
-            //
-            // Why: on Vercel previews/production a missing env var used
-            // to leave us calling `http://localhost:3000`, which (a) is
-            // the user's own machine, not the backend, and (b) is blocked
-            // outright by our CSP (`connect-src 'self' blob: https: wss:`
-            // disallows http://). The browser would reject the request
-            // before it ever left, and the catch-all below mislabelled
-            // it as "Cashu mint may be busy". Cost us a day of debugging.
-            const apiBase = import.meta.env.VITE_API_URL;
-            if (!apiBase) {
-              toast({
-                title: "App is misconfigured",
-                description:
-                  "VITE_API_URL is not set on this deployment. The site can't reach the SafeSale backend. Please contact support.",
-                variant: "destructive",
-              });
-              return;
-            }
-            const url = `${apiBase}/api/orders/${orderToken}/confirm-payment`;
-
-            // The Cashu testnut mint is a public test service and its
-            // first hit after idle frequently 500s with a generic
-            // "Something went wrong" envelope. A retry 2-3s later
-            // typically succeeds (the mint warms up). Empirical probing
-            // against Railway showed first-attempt 500 → second-attempt
-            // 200 in ~3s in the worst case, so we retry up to 5 times
-            // with backoff [2s, 4s, 6s, 8s] = up to ~20s total. The
-            // backend's confirm-payment handler is idempotent (returns
-            // the existing payment_locked order on a second hit) so a
-            // retry that races a slow first call is safe.
-            const maxRetries = 5;
-            const backoffMs = [2000, 4000, 6000, 8000];
-            let lastError = "";
-            // `lastWasNetwork` distinguishes "fetch threw" (network /
-            // CSP / DNS / CORS — the request didn't make it to the
-            // server) from "fetch resolved with !res.ok" (we did reach
-            // the server, it returned an error envelope). The two need
-            // different user copy and we shouldn't mix them up again.
-            let lastWasNetwork = false;
-
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-              try {
-                toast({
-                  title: attempt === 1
-                    ? "Confirming payment…"
-                    : `Retrying… (attempt ${attempt}/${maxRetries})`,
-                });
-                const res = await fetch(url, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                });
-                if (!res.ok) {
-                  const body = await res.json().catch(() => ({}));
-                  lastError =
-                    body?.error?.message ||
-                    body?.message ||
-                    `HTTP ${res.status}`;
-                  lastWasNetwork = false;
-                  // 5xx is almost always the Cashu mint being cold —
-                  // retry. 4xx means the request itself was bad
-                  // (e.g. order in wrong status); no point retrying.
-                  if (res.status >= 500 && attempt < maxRetries) {
-                    await new Promise((r) =>
-                      setTimeout(r, backoffMs[attempt - 1] ?? 8000),
-                    );
-                    continue;
-                  }
-                  throw new Error(lastError);
-                }
-                toast({ title: "Payment confirmed ✓" });
-                onConfirm();
-                return;
-              } catch (err) {
-                // `fetch` rejecting (vs resolving with !res.ok) is
-                // network-layer: DNS, CORS, CSP, offline, TLS.
-                // Don't pretend it's a backend/mint problem.
-                lastWasNetwork = !(
-                  err instanceof Error && lastError === err.message
-                );
-                lastError = err instanceof Error ? err.message : "Unknown error";
-                if (attempt < maxRetries) {
-                  await new Promise((r) =>
-                    setTimeout(r, backoffMs[attempt - 1] ?? 8000),
-                  );
-                  continue;
-                }
-              }
-            }
-            toast({
-              title: "Payment confirmation failed",
-              description: lastWasNetwork
-                ? `Couldn't reach the SafeSale backend (${lastError}). Check your connection or try again shortly.`
-                : `${lastError}. The Cashu mint may be busy — try again in a moment.`,
-              variant: "destructive",
-            });
-          }}
-          className="mt-2 h-12 w-full rounded-lg text-base font-semibold border-brand text-brand hover:bg-brand/10"
-        >
-          Confirm Payment (Demo)
-        </Button>
-      )}
       <p className="mt-2 text-center text-[11px] text-ink-soft">
         We usually detect bank transfers within 60 seconds.
       </p>

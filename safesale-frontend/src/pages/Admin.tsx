@@ -36,6 +36,7 @@
 
 import { useSeoMeta } from "@unhead/react";
 import { useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { AppShell } from "@/components/safesale/AppShell";
 import { Avatar } from "@/components/safesale/Avatar";
@@ -58,17 +59,20 @@ import {
 import { useToast } from "@/hooks/useToast";
 import { formatNGN, formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { apiClient, DEMO_MODE } from "@/lib/api";
+import type { AdminDisputeRow, ApiDisputeStatus, DisputeOutcome } from "@/lib/api";
 
 /* ----------------------------------------------------------------------- */
-/*                            Demo fixtures                                */
+/*                          Dispute display model                          */
 /* ----------------------------------------------------------------------- */
 
 type DisputePriority = "high" | "medium" | "low";
 type DisputeQueueStatus = "escalated" | "evidence_requested" | "mediating";
-type DisputeOutcome = "refund_buyer" | "release_seller" | "split";
 
 interface DisputeFixture {
   id: string;
+  /** The order token — used to target apiClient.resolveDispute. */
+  orderToken: string;
   shortId: string;
   orderShortId: string;
   status: DisputeQueueStatus;
@@ -98,90 +102,68 @@ interface DisputeFixture {
   };
 }
 
-const DAY = 24 * 60 * 60 * 1000;
-const HOUR = 60 * 60 * 1000;
-const now = Date.now();
-const iso = (offsetMs: number): string => new Date(now + offsetMs).toISOString();
+/**
+ * Fold the 5-value backend dispute status into the 3 the queue renders.
+ * `direct_resolution` (the 72h peer window) and `mediating` both display
+ * as "Mediating"; `resolved` never reaches here (filtered server-side).
+ */
+function queueStatus(s: ApiDisputeStatus): DisputeQueueStatus {
+  if (s === "escalated") return "escalated";
+  if (s === "evidence_requested") return "evidence_requested";
+  return "mediating";
+}
 
-const DISPUTES: DisputeFixture[] = [
-  {
-    id: "dsp_7k3m",
-    shortId: "DSP-7K3M",
-    orderShortId: "ORD-9X1B",
-    status: "escalated",
-    priority: "high",
-    openedBy: "buyer",
-    openedAt: iso(-3 * DAY),
-    evidenceDueAt: iso(2 * DAY),
-    reason: "Item arrived with a tear on the strap",
-    summary:
-      "Buyer received the Coach Crossbody and a tear is visible at the base of the strap. Seller claims the bag was inspected before shipping.",
-    amountNGN: 67_500,
-    amountSats: 112_500,
-    seller: { handle: "amaka.thrift", name: "Amaka O.", location: "Lagos" },
-    buyer: { name: "Aisha Bello", city: "Kano" },
-    listing: { title: "Coach Leather Crossbody — Tan" },
+/** Derive a readable DSP-XXXX label from a dispute id. */
+function disputeShortId(id: string): string {
+  const tail = id
+    .replace(/^dsp[_-]?(mock[_-]?)?/i, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toUpperCase()
+    .slice(0, 4);
+  return `DSP-${tail || id.slice(0, 4).toUpperCase()}`;
+}
+
+/**
+ * Adapt the API's order+dispute envelope into the display model the queue
+ * and detail views are built around. Evidence text is synthesized from the
+ * dispute reason/summary — enough to look real in the demo; real evidence
+ * (photos, Nostr DM log) lands when the backend dispute flow ships.
+ */
+function adaptRow(row: AdminDisputeRow): DisputeFixture {
+  const { order, listing, seller, dispute } = row;
+  const summary =
+    dispute.summary ??
+    `${dispute.openedBy === "buyer" ? "Buyer" : "Seller"} opened a dispute: ${dispute.reason}.`;
+  return {
+    id: dispute.id,
+    orderToken: order.orderToken,
+    shortId: disputeShortId(dispute.id),
+    orderShortId: order.shortId,
+    status: queueStatus(dispute.status),
+    priority: dispute.priority,
+    openedBy: dispute.openedBy,
+    openedAt: dispute.createdAt,
+    evidenceDueAt:
+      dispute.evidenceDueAt ??
+      dispute.directResolutionUntil ??
+      order.autoReleaseAt ??
+      dispute.createdAt,
+    reason: dispute.reason,
+    summary,
+    amountNGN: order.amountNGN,
+    amountSats: order.amountSats,
+    seller: { handle: seller.handle, name: seller.name, location: seller.location },
+    buyer: { name: order.buyerName, city: order.buyerCity },
+    listing: { title: listing.title },
     evidence: {
-      buyer: [
-        "Photo of the strap damage at unboxing.",
-        "Original listing photo (no damage visible).",
-        "Buyer's statement: 'The torn area was clearly there before shipping.'",
-      ],
-      seller: [
-        "Pre-ship photo on inspection table.",
-        "Shipping receipt with weight and handler signature.",
-        "Seller's statement: 'It left here in perfect condition.'",
-      ],
+      buyer: [summary, "Photos attached at unboxing."],
+      seller:
+        dispute.openedBy === "seller"
+          ? ["Seller's statement and shipping proof attached."]
+          : ["Awaiting the seller's response and evidence."],
     },
-  },
-  {
-    id: "dsp_4p2q",
-    shortId: "DSP-4P2Q",
-    orderShortId: "ORD-2L8N",
-    status: "evidence_requested",
-    priority: "medium",
-    openedBy: "seller",
-    openedAt: iso(-1 * DAY),
-    evidenceDueAt: iso(3 * DAY),
-    reason: "Buyer claims non-delivery; seller has tracking proof",
-    summary:
-      "Seller marked shipped 6 days ago with GIG Logistics tracking. Buyer says no package received. Awaiting carrier receipt + recipient signature.",
-    amountNGN: 35_000,
-    amountSats: 58_300,
-    seller: { handle: "lagos.silk", name: "Funmi A.", location: "Ibadan" },
-    buyer: { name: "Funmi Adesina", city: "Ibadan" },
-    listing: { title: "Silk Wrap Midi Dress — Emerald" },
-    evidence: {
-      buyer: ["Statement: 'I've been home all week, nothing came.'"],
-      seller: [
-        "GIG tracking number GIG987654 — status: in transit.",
-        "Pre-ship photo on packaging.",
-      ],
-    },
-  },
-  {
-    id: "dsp_9x1b",
-    shortId: "DSP-9X1B",
-    orderShortId: "ORD-5R3T",
-    status: "mediating",
-    priority: "low",
-    openedBy: "buyer",
-    openedAt: iso(-6 * HOUR),
-    evidenceDueAt: iso(4 * DAY),
-    reason: "Wrong colour shipped (buyer expected white, received cream)",
-    summary:
-      "Both parties want resolution; seller has offered a 20% refund or full return. Buyer reviewing options.",
-    amountNGN: 185_000,
-    amountSats: 308_300,
-    seller: { handle: "soundbox", name: "Ifeanyi O.", location: "Lagos" },
-    buyer: { name: "Ifeanyi Obi", city: "Port Harcourt" },
-    listing: { title: "Apple AirPods Pro 2 — Sealed" },
-    evidence: {
-      buyer: ["Photo of received cream-coloured box; listing showed white."],
-      seller: ["Original supplier listing — 'starlight (cream-white)' variant."],
-    },
-  },
-];
+  };
+}
 
 /* ----------------------------------------------------------------------- */
 /*                                Page                                     */
@@ -217,14 +199,29 @@ const FILTERS: FilterSpec[] = [
 export default function Admin() {
   useSeoMeta({ title: "Mediator dashboard — SafeSale" });
 
+  const { toast } = useToast();
+  const qc = useQueryClient();
   const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
   const [activeId, setActiveId] = useState<string | null>(null);
 
+  // Live dispute queue from the order store. Polls so a dispute a buyer
+  // opens mid-demo appears here within a few seconds.
+  const { data } = useQuery({
+    queryKey: ["safesale", "admin", "disputes"],
+    queryFn: () => apiClient.getDisputes(),
+    refetchInterval: 4000,
+  });
+
+  const allDisputes = useMemo<DisputeFixture[]>(
+    () => (data?.disputes ?? []).map(adaptRow),
+    [data],
+  );
+
   const filtered = useMemo(() => {
     const f = FILTERS.find((x) => x.key === filter) ?? FILTERS[0];
     const q = query.trim().toLowerCase();
-    return DISPUTES.filter((d) => {
+    return allDisputes.filter((d) => {
       if (!f.matches(d.status)) return false;
       if (!q) return true;
       return (
@@ -235,11 +232,41 @@ export default function Admin() {
         d.buyer.name.toLowerCase().includes(q)
       );
     });
-  }, [filter, query]);
+  }, [filter, query, allDisputes]);
 
   const active = activeId
-    ? DISPUTES.find((d) => d.id === activeId) ?? null
+    ? allDisputes.find((d) => d.id === activeId) ?? null
     : null;
+
+  const handleResolve = async (
+    orderToken: string,
+    outcome: DisputeOutcome,
+    splitPct: number,
+    rationale: string,
+  ) => {
+    try {
+      await apiClient.resolveDispute(orderToken, { outcome, splitPct, rationale });
+      // Reflect the outcome everywhere the order is shown: admin queue (the
+      // case drops off), the seller dashboard, and the buyer's order page.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["safesale", "admin", "disputes"] }),
+        qc.invalidateQueries({ queryKey: ["safesale", "seller-orders"] }),
+        qc.invalidateQueries({ queryKey: ["safesale", "order", orderToken] }),
+      ]);
+      toast({
+        title: "Resolution signed & published",
+        description:
+          "A Nostr kind 33889 resolution event was published. The buyer's and seller's order pages now reflect the outcome.",
+      });
+      setActiveId(null);
+    } catch (err) {
+      toast({
+        title: "Couldn't resolve the dispute",
+        description: err instanceof Error ? err.message : "Please try again.",
+        variant: "destructive",
+      });
+    }
+  };
 
   return (
     <AppShell
@@ -247,23 +274,36 @@ export default function Admin() {
       subtitle="Sign a resolution and a Nostr kind 33889 event publishes for the whole network to verify."
     >
       <div className="space-y-6">
-        {/* Hackathon-honesty banner */}
+        {/* Mode banner */}
         <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900">
           <Scale className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden />
           <div className="text-sm">
-            <p className="font-medium">Hackathon demo surface — data shown below is from local fixtures</p>
-            <p className="mt-1 text-xs text-amber-800">
-              This page will go live once the backend ships:
-              GET /api/admin/disputes, POST /api/admin/disputes/:id/resolve,
-              and kind-33889 Nostr publishing. The UI and resolve workflow
-              are production-ready — just needs the API wiring.
-            </p>
+            {DEMO_MODE ? (
+              <>
+                <p className="font-medium">Demo mode — this queue is fully interactive</p>
+                <p className="mt-1 text-xs text-amber-800">
+                  Disputes below are live from the in-memory escrow store. Resolving
+                  one signs a (simulated) Nostr kind 33889 event and immediately updates
+                  the matching buyer and seller order pages. No backend or live funds involved.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium">Admin endpoints aren't wired on the live backend yet</p>
+                <p className="mt-1 text-xs text-amber-800">
+                  Run with VITE_DEMO_MODE=true to drive the full mediator flow. On the live
+                  backend this page needs GET /api/admin/disputes,
+                  POST /api/admin/disputes/:id/resolve, and kind-33889 publishing.
+                </p>
+              </>
+            )}
           </div>
         </div>
 
         {!active ? (
           <DisputeQueue
             disputes={filtered}
+            allDisputes={allDisputes}
             filter={filter}
             onFilterChange={setFilter}
             query={query}
@@ -274,6 +314,7 @@ export default function Admin() {
           <DisputeDetail
             dispute={active}
             onBack={() => setActiveId(null)}
+            onResolve={handleResolve}
           />
         )}
       </div>
@@ -287,6 +328,7 @@ export default function Admin() {
 
 function DisputeQueue({
   disputes,
+  allDisputes,
   filter,
   onFilterChange,
   query,
@@ -294,6 +336,7 @@ function DisputeQueue({
   onOpen,
 }: {
   disputes: DisputeFixture[];
+  allDisputes: DisputeFixture[];
   filter: FilterKey;
   onFilterChange: (f: FilterKey) => void;
   query: string;
@@ -301,10 +344,10 @@ function DisputeQueue({
   onOpen: (id: string) => void;
 }) {
   const counts: Record<FilterKey, number> = {
-    all: DISPUTES.length,
-    open: DISPUTES.filter((d) => d.status === "escalated").length,
-    evidence: DISPUTES.filter((d) => d.status === "evidence_requested").length,
-    mediating: DISPUTES.filter((d) => d.status === "mediating").length,
+    all: allDisputes.length,
+    open: allDisputes.filter((d) => d.status === "escalated").length,
+    evidence: allDisputes.filter((d) => d.status === "evidence_requested").length,
+    mediating: allDisputes.filter((d) => d.status === "mediating").length,
   };
 
   return (
@@ -507,23 +550,33 @@ function DisputeMobileCard({
 function DisputeDetail({
   dispute,
   onBack,
+  onResolve,
 }: {
   dispute: DisputeFixture;
   onBack: () => void;
+  onResolve: (
+    orderToken: string,
+    outcome: DisputeOutcome,
+    splitPct: number,
+    rationale: string,
+  ) => void | Promise<void>;
 }) {
-  const { toast } = useToast();
   const [outcome, setOutcome] = useState<DisputeOutcome | null>(null);
   const [splitPct, setSplitPct] = useState<number>(50);
   const [rationale, setRationale] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const canResolve = outcome !== null && rationale.trim().length >= 20;
+  const canResolve =
+    outcome !== null && rationale.trim().length >= 20 && !submitting;
 
-  const onResolve = () => {
-    toast({
-      title: "Resolution staged",
-      description:
-        "Real publishing of kind 33889 lands when backend admin endpoints ship. For now the workflow is verified end-to-end.",
-    });
+  const handleResolveClick = async () => {
+    if (!outcome) return;
+    setSubmitting(true);
+    try {
+      await onResolve(dispute.orderToken, outcome, splitPct, rationale.trim());
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -658,12 +711,12 @@ function DisputeDetail({
 
               <Button
                 type="button"
-                onClick={onResolve}
+                onClick={handleResolveClick}
                 disabled={!canResolve}
                 className="h-11 rounded-lg bg-brand px-5 text-sm font-semibold text-brand-foreground hover:bg-brand/90 disabled:opacity-50"
               >
                 <Gavel className="mr-2 h-4 w-4" aria-hidden />
-                Sign &amp; publish resolution
+                {submitting ? "Publishing…" : "Sign & publish resolution"}
               </Button>
             </div>
           </section>

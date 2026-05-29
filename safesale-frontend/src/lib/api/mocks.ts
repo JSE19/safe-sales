@@ -18,6 +18,7 @@
  */
 
 import type {
+  AdminDisputeRow,
   ApiDispute,
   ApiListing,
   ApiOrder,
@@ -29,6 +30,7 @@ import type {
   CreateOrderResponse,
   CreateSellerRequest,
   CreateSellerResponse,
+  GetDisputesResponse,
   GetOrderResponse,
   GetSellerOrdersResponse,
   MockListingHint,
@@ -36,6 +38,8 @@ import type {
   OpenDisputeResponse,
   ReleaseOrderRequest,
   ReleaseOrderResponse,
+  ResolveDisputeRequest,
+  ResolveDisputeResponse,
   SellerOrderRow,
   ShipOrderRequest,
   ShipOrderResponse,
@@ -48,9 +52,25 @@ import {
   getListing,
   getOrderByToken,
   getSeller,
-  orders as fixtureOrdersArray,
 } from "@/lib/mock";
 import type { EscrowStatus } from "@/lib/types";
+import { nip19 } from "nostr-tools";
+
+/**
+ * Decode an npub to its hex pubkey. A buyer-placed order is attributed to
+ * the seller's Nostr *hex* pubkey (it rides in on the listing event via
+ * `_listingHint`), while the seller dashboard queries by npub. This lets
+ * `getSellerOrders` reconcile the two identity spaces. Returns undefined
+ * on anything that isn't a valid npub.
+ */
+function npubToHex(npub: string): string | undefined {
+  try {
+    const decoded = nip19.decode(npub);
+    return decoded.type === "npub" ? (decoded.data as string) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /* --------------------- in-memory order store (mock) -------------------- */
 
@@ -392,31 +412,27 @@ export const mockApi = {
 
   async getSellerOrders(npub: string): Promise<GetSellerOrdersResponse> {
     const seller = registeredSellersByNpub.get(npub);
-    // If the npub doesn't match a registered seller, try to fall back
-    // to the fixture currentSeller — useful for cold demos against the
-    // mock where nobody has actually signed up.
-    const sellerId = seller?.id ?? currentSeller.id;
+    // A buyer-placed order is attributed to the seller's Nostr hex pubkey
+    // (carried by the listing's `_listingHint`), but the dashboard queries
+    // by npub. Build the set of every identifier that could legitimately
+    // refer to this seller so the order surfaces regardless of which
+    // identity space it was stored under: a registered mock-seller id (or
+    // the fixture fallback for a cold demo), the npub itself, and its hex.
+    const ids = new Set<string>(
+      [seller?.id ?? currentSeller.id, npub, npubToHex(npub)].filter(
+        Boolean,
+      ) as string[],
+    );
 
-    // Pull rows from the in-memory order store first (buyer-flow orders
-    // created this session), then any fixture orders this seller owns.
+    // Only live, buyer-created orders from this session — no pre-seeded
+    // fixtures. The dashboard reflects exactly what has happened in the demo.
     const rows: SellerOrderRow[] = [];
-
     for (const env of memoryOrders.values()) {
-      if (env.order.sellerId !== sellerId) continue;
-      rows.push({
-        ...env.order,
-        listing: env.listing,
-        dispute: env.dispute,
-      });
-    }
-
-    // Fixture orders — pull any fixture orders this seller owns that
-    // aren't already in memoryOrders.
-    for (const seedOrder of fixtureOrdersArray) {
-      if (seedOrder.sellerId !== sellerId) continue;
-      if (rows.some((r) => r.orderToken === seedOrder.orderToken)) continue;
-      const env = fixtureEnvelope(seedOrder.orderToken);
-      if (!env) continue;
+      const matches =
+        ids.has(env.order.sellerId) ||
+        ids.has(env.seller.pubkey) ||
+        ids.has(env.seller.npub);
+      if (!matches) continue;
       rows.push({
         ...env.order,
         listing: env.listing,
@@ -502,8 +518,9 @@ export const mockApi = {
       dispute: null,
     });
 
-    // Mock the Bitnob webhook landing ~5s later.
-    transitionAfter(token, 5000, "payment_locked");
+    // Mock the Bitnob webhook landing a few seconds later — snappy enough
+    // for a live demo, slow enough to show the "detecting payment" beat.
+    transitionAfter(token, 3000, "payment_locked");
 
     return {
       orderToken: token,
@@ -648,5 +665,102 @@ export const mockApi = {
     };
     memoryOrders.set(token, { ...env, order: updated });
     return { order: updated };
+  },
+
+  /**
+   * Admin dispute queue. Returns every order in the store that has an
+   * open (non-resolved) dispute, joined to its listing + seller. Powers
+   * `/admin`. A dispute opened by a buyer this session lands here too, so
+   * the mediator sees it appear live.
+   */
+  async getDisputes(): Promise<GetDisputesResponse> {
+    const rows: AdminDisputeRow[] = [];
+    for (const env of memoryOrders.values()) {
+      if (!env.dispute) continue;
+      if (env.dispute.status === "resolved") continue;
+      rows.push({
+        order: env.order,
+        listing: env.listing,
+        seller: env.seller,
+        dispute: env.dispute,
+      });
+    }
+    // Newest dispute first.
+    rows.sort(
+      (a, b) =>
+        new Date(b.dispute.createdAt).getTime() -
+        new Date(a.dispute.createdAt).getTime(),
+    );
+    return { disputes: rows };
+  },
+
+  /**
+   * Mediator resolves a dispute. Mutates the SHARED store entry so the
+   * outcome reflects everywhere the order is shown — the buyer's order
+   * page, the seller's dashboard, and the admin queue (the case drops off
+   * because it's now resolved). This is the full round-trip the demo needs.
+   */
+  async resolveDispute(
+    orderToken: string,
+    req: ResolveDisputeRequest,
+  ): Promise<ResolveDisputeResponse> {
+    const env = memoryOrders.get(orderToken) ?? fixtureEnvelope(orderToken);
+    if (!env || !env.dispute) {
+      throw new ApiError(
+        "DISPUTE_NOT_FOUND",
+        "No open dispute found for this order.",
+        404,
+      );
+    }
+
+    const amount = env.order.amountNGN;
+    const buyerShare =
+      req.outcome === "refund_buyer"
+        ? 100
+        : req.outcome === "release_seller"
+          ? 0
+          : Math.min(100, Math.max(0, req.splitPct ?? 50));
+    const buyerRefundNGN = Math.round((amount * buyerShare) / 100);
+    const sellerReleaseNGN = amount - buyerRefundNGN;
+    const resolvedAt = nowIso();
+
+    const nextStatus: ApiOrderStatus =
+      req.outcome === "refund_buyer" ? "refunded" : "completed";
+
+    const updatedOrder: ApiOrder = {
+      ...env.order,
+      status: nextStatus,
+      refundedAt:
+        req.outcome === "refund_buyer"
+          ? resolvedAt
+          : (env.order.refundedAt ?? null),
+      releasedAt:
+        req.outcome === "refund_buyer"
+          ? (env.order.releasedAt ?? null)
+          : resolvedAt,
+      updatedAt: resolvedAt,
+    };
+
+    const updatedDispute: ApiDispute = {
+      ...env.dispute,
+      status: "resolved",
+      resolvedAt,
+      resolution: {
+        outcome: req.outcome,
+        buyerRefundNGN,
+        sellerReleaseNGN,
+        reasoning: req.rationale,
+        mediator: "SafeSale mediator",
+        resolvedAt,
+      },
+    };
+
+    memoryOrders.set(orderToken, {
+      ...env,
+      order: updatedOrder,
+      dispute: updatedDispute,
+    });
+
+    return { order: updatedOrder, dispute: updatedDispute };
   },
 };

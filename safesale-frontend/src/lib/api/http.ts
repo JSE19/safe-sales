@@ -21,12 +21,15 @@ import type {
   CreateOrderResponse,
   CreateSellerRequest,
   CreateSellerResponse,
+  GetDisputesResponse,
   GetOrderResponse,
   GetSellerOrdersResponse,
   OpenDisputeRequest,
   OpenDisputeResponse,
   ReleaseOrderRequest,
   ReleaseOrderResponse,
+  ResolveDisputeRequest,
+  ResolveDisputeResponse,
   ShipOrderRequest,
   ShipOrderResponse,
 } from "./types";
@@ -152,6 +155,25 @@ export const httpApi = {
       "POST",
       `/api/orders/${encodeURIComponent(token)}/ship`,
       req,
+    );
+  },
+  getDisputes(): Promise<GetDisputesResponse> {
+    // The live backend has the Dispute table but no admin queue endpoint
+    // shipped yet. Surface a clear error rather than a silent empty queue;
+    // the mediator dashboard is meant to run in demo mode (VITE_DEMO_MODE=true).
+    return Promise.reject(
+      new ApiError(
+        "NOT_AVAILABLE",
+        "Admin dispute queue isn't wired on the live backend yet. Run the demo with VITE_DEMO_MODE=true.",
+      ),
+    );
+  },
+  resolveDispute(): Promise<ResolveDisputeResponse> {
+    return Promise.reject(
+      new ApiError(
+        "NOT_AVAILABLE",
+        "Dispute resolution isn't wired on the live backend yet. Run the demo with VITE_DEMO_MODE=true.",
+      ),
     );
   },
 };

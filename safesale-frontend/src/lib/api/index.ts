@@ -8,11 +8,12 @@
  * from `./http` or `./mocks` directly.
  */
 
-export { apiClient, API_BACKEND_CONFIGURED } from "./client";
+export { apiClient, API_BACKEND_CONFIGURED, DEMO_MODE } from "./client";
 export type { ApiClient } from "./client";
 export { ApiError } from "./errors";
 export type { ApiErrorCode } from "./errors";
 export type {
+  AdminDisputeRow,
   ApiDispute,
   ApiDisputeStatus,
   ApiListing,
@@ -26,6 +27,8 @@ export type {
   CreateOrderResponse,
   CreateSellerRequest,
   CreateSellerResponse,
+  DisputeOutcome,
+  GetDisputesResponse,
   GetOrderResponse,
   GetSellerOrdersResponse,
   MockListingHint,
@@ -33,6 +36,8 @@ export type {
   OpenDisputeResponse,
   ReleaseOrderRequest,
   ReleaseOrderResponse,
+  ResolveDisputeRequest,
+  ResolveDisputeResponse,
   SellerOrderRow,
   ShipOrderRequest,
   ShipOrderResponse,

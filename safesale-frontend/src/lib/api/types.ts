@@ -290,6 +290,47 @@ export interface OpenDisputeResponse {
   dispute: ApiDispute;
 }
 
+/* ----------------------------- admin / mediator ----------------------- */
+
+/**
+ * Mediator resolution outcome.
+ *   - refund_buyer    → full refund, order → refunded
+ *   - release_seller  → full release, order → completed
+ *   - split           → buyer gets `splitPct`%, seller the rest; order → completed
+ */
+export type DisputeOutcome = "refund_buyer" | "release_seller" | "split";
+
+/**
+ * One row in the admin dispute queue — the full order context joined to
+ * its open dispute. Mirrors what `GET /api/admin/disputes` would return
+ * once the backend ships it; for the hackathon demo it's served by the
+ * mock client from the in-memory order store.
+ */
+export interface AdminDisputeRow {
+  order: ApiOrder;
+  listing: ApiListing;
+  seller: ApiSeller;
+  dispute: ApiDispute;
+}
+
+export interface GetDisputesResponse {
+  disputes: AdminDisputeRow[];
+}
+
+/** `POST /api/admin/disputes/:id/resolve` request body. */
+export interface ResolveDisputeRequest {
+  outcome: DisputeOutcome;
+  /** Buyer's share 0–100, only meaningful when `outcome === "split"`. */
+  splitPct?: number;
+  /** Public rationale — published in the mediator's signed resolution. */
+  rationale: string;
+}
+
+export interface ResolveDisputeResponse {
+  order: ApiOrder;
+  dispute: ApiDispute;
+}
+
 /* --------------------------- seller endpoints -------------------------- */
 
 /**
