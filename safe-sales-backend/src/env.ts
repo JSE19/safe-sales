@@ -57,26 +57,29 @@ const EnvSchema = z.object({
   MEDIATOR_NSEC: z.string().optional(),
   MEDIATOR_NPUB: z.string().optional(),
 
-  // Cashu
-  CASHU_MINT_URL: z.string().url().default('https://testnut.cashu.space'),
-
-  // Lightning
-  SAFESALE_FEE_LN_ADDRESS: z.string().optional(),
-
   // Nostr relays
   NOSTR_RELAYS: z
     .string()
     .default('wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net')
     .transform((s) => s.split(',').map((u) => u.trim()).filter(Boolean)),
 
-  // Bitnob (mocked for MVP)
-  BITNOB_API_KEY: z.string().optional(),
-  BITNOB_WEBHOOK_SECRET: z.string().optional(),
-  BITNOB_BASE_URL: z
+  // MavaPay — all money movement (in, hold, out)
+  MAVAPAY_READ_KEY: z.string().optional(),   // For lookups (name enquiry)
+  MAVAPAY_WRITE_KEY: z.string().optional(),  // For mutations (create payment link, withdraw)
+  MAVAPAY_WEBHOOK_SECRET: z.string().optional(), // Shared secret to verify webhook signatures
+  MAVAPAY_BASE_URL: z
     .string()
     .optional()
-    .transform((v) => (v && v.length > 0 ? v : 'https://sandboxapi.bitnob.co'))
+    .transform((v) => (v && v.length > 0 ? v : 'https://staging.api.mavapay.co'))
     .pipe(z.string().url()),
+  MAVAPAY_WEBHOOK_BASE_URL: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.length > 0 ? v : 'http://localhost:3000'))
+    .pipe(z.string().url()),
+
+  // SafeSale fee
+  SAFESALE_FEE_LN_ADDRESS: z.string().optional(),
 
   // Email (Resend)
   RESEND_API_KEY: z.string().optional(),

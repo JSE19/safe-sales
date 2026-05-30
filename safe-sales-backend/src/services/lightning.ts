@@ -11,8 +11,8 @@
  *
  * Spec: LUD-16 (Lightning address) + LUD-06 (LNURL-pay)
  *
- * Used by services/cashu.ts when we need the Cashu mint to melt sats to
- * the seller's payout address or to SafeSale's 1% fee address.
+ * Used when the seller chooses Lightning payout and we need to resolve
+ * their LN address to a bolt11 invoice for the MavaPay withdraw call.
  */
 
 import { logger } from '../lib/logger.js';

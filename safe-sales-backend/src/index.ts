@@ -4,13 +4,12 @@ import { ZodError } from 'zod';
 import { env } from './env.js';
 import { logger } from './lib/logger.js';
 import { HttpError } from './lib/errors.js';
-import { verifyMintCapabilities } from './services/cashu.js';
+import { startAutoReleaseCron, stopAutoReleaseCron } from './services/scheduler.js';
 
 import sellersRoute from './routes/sellers.js';
 import listingsRoute from './routes/listings.js';
 import ordersRoute from './routes/orders.js';
-import escrowRoute from './routes/escrow.js';
-import webhooksRoute from './routes/webhooks.js';
+import mavapayRoute from './routes/mavapay.js';
 import devRoute from './routes/dev.js';
 
 /**
@@ -114,8 +113,7 @@ async function buildServer() {
   await app.register(sellersRoute);
   await app.register(listingsRoute);
   await app.register(ordersRoute);
-  await app.register(escrowRoute);
-  await app.register(webhooksRoute);
+  await app.register(mavapayRoute);
   await app.register(devRoute);
 
   return app;
@@ -131,30 +129,25 @@ async function start() {
   // do the right thing on a per-route basis.
   const app = await buildServer();
 
+  let cronHandle: NodeJS.Timeout | undefined;
+
   try {
     const address = await app.listen({
       port: env.PORT,
       host: '0.0.0.0', // critical: Railway routes from outside the container
     });
     logger.info({ address, env: env.NODE_ENV }, 'SafeSale backend listening');
+
+    cronHandle = startAutoReleaseCron();
   } catch (err) {
     logger.fatal(err, 'Failed to start server');
     process.exit(1);
   }
 
-  // Background mint check — fire-and-forget. Logs at info/error level so
-  // we can tell from the Railway dashboard whether the mint is healthy
-  // without the boot sequence depending on it.
-  verifyMintCapabilities().catch((err) => {
-    logger.error(
-      { err: err instanceof Error ? err.message : err, mint: env.CASHU_MINT_URL },
-      'Cashu mint check failed — server is up, but mint-dependent routes will fail or fall back to demo tokens. Investigate the mint.',
-    );
-  });
-
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutting down');
+    if (cronHandle) stopAutoReleaseCron(cronHandle);
     try {
       await app.close();
       process.exit(0);

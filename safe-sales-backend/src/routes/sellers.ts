@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { nip19 } from 'nostr-tools';
 import { prisma } from '../db/client.js';
 import { BadRequest, Conflict, NotFound } from '../lib/errors.js';
+import { nameEnquiry as mavapayNameEnquiry } from '../services/mavapay.js';
 
 const CreateSellerSchema = z.object({
   npub: z.string().regex(/^npub1[0-9a-z]+$/, 'Must be a bech32 npub'),
@@ -19,6 +20,7 @@ const CreateSellerSchema = z.object({
   bankName: z.string().max(80).optional(),
   bankAccount: z.string().max(20).optional(),
   bankHolder: z.string().max(80).optional(),
+  bankCode: z.string().max(10).optional(),
   lnAddress: z.string().email('Must look like a Lightning address (user@domain)').optional(),
 });
 
@@ -49,6 +51,21 @@ const sellersRoute: FastifyPluginAsync = async (app) => {
     if (existingHandle) throw new Conflict(`Handle "@${body.handle}" is already taken`);
     if (existingNpub) throw new Conflict('A seller with this Nostr identity already exists');
 
+    let bankVerifiedName: string | null = null;
+    if (body.bankName && body.bankAccount && body.bankHolder) {
+      try {
+        const result = await mavapayNameEnquiry({
+          bankCode: body.bankCode ?? body.bankName,
+          accountNumber: body.bankAccount,
+        });
+        bankVerifiedName = result.accountName;
+      } catch (err) {
+        throw new BadRequest(
+          `Bank account verification failed: ${err instanceof Error ? err.message : 'Name Enquiry unavailable'}`,
+        );
+      }
+    }
+
     const seller = await prisma.seller.create({
       data: {
         npub: body.npub,
@@ -62,6 +79,9 @@ const sellersRoute: FastifyPluginAsync = async (app) => {
         bankName: body.bankName,
         bankAccount: body.bankAccount,
         bankHolder: body.bankHolder,
+        bankCode: body.bankCode,
+        bankVerifiedName,
+        bankVerifiedAt: bankVerifiedName ? new Date() : null,
         lnAddress: body.lnAddress,
       },
     });
@@ -99,6 +119,60 @@ const sellersRoute: FastifyPluginAsync = async (app) => {
       },
     };
   });
+
+  // PATCH /api/sellers/:id/payout — update payout preference
+  const UpdatePayoutSchema = z.object({
+    bankName: z.string().min(2).max(80).optional(),
+    bankAccount: z.string().min(10).max(12).optional(),
+    bankHolder: z.string().min(2).max(80).optional(),
+    bankCode: z.string().max(10).optional(),
+    lnAddress: z.string().email().optional(),
+  }).refine(
+    (v) => v.bankName || v.lnAddress,
+    'Provide either bank details or a Lightning address',
+  );
+
+  app.patch<{ Params: { id: string } }>(
+    '/api/sellers/:id/payout',
+    async (request) => {
+      const body = UpdatePayoutSchema.parse(request.body);
+      const seller = await prisma.seller.findUnique({ where: { id: request.params.id } });
+      if (!seller) throw new NotFound('Seller not found');
+
+      let bankVerifiedName: string | null = seller.bankVerifiedName;
+      let bankVerifiedAt: Date | null = seller.bankVerifiedAt;
+
+      if (body.bankName && body.bankAccount && body.bankHolder) {
+        try {
+          const result = await mavapayNameEnquiry({
+            bankCode: body.bankCode ?? body.bankName,
+            accountNumber: body.bankAccount,
+          });
+          bankVerifiedName = result.accountName;
+          bankVerifiedAt = new Date();
+        } catch (err) {
+          throw new BadRequest(
+            `Bank account verification failed: ${err instanceof Error ? err.message : 'Name Enquiry unavailable'}`,
+          );
+        }
+      }
+
+      const updated = await prisma.seller.update({
+        where: { id: seller.id },
+        data: {
+          bankName: body.bankName ?? seller.bankName,
+          bankAccount: body.bankAccount ?? seller.bankAccount,
+          bankHolder: body.bankHolder ?? seller.bankHolder,
+          bankCode: body.bankCode ?? seller.bankCode ?? null,
+          bankVerifiedName,
+          bankVerifiedAt,
+          lnAddress: body.lnAddress ?? seller.lnAddress,
+        },
+      });
+
+      return { seller: updated };
+    },
+  );
 };
 
 export default sellersRoute;

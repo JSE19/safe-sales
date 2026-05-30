@@ -16,13 +16,13 @@ datasource db {
 // EscrowStatus — the state machine an Order moves through
 // --------------------------------------------------------------------------
 enum EscrowStatus {
-  pending_payment // Order created, awaiting buyer bank transfer
-  payment_locked // Bitnob confirmed; Cashu token minted & P2PK-locked to buyer
+  pending_payment // Order created, awaiting buyer bank transfer via MavaPay
+  paid // MavaPay webhook confirmed; funds held in SafeSale's MavaPay wallet
   shipped // Seller marked shipped; 7-day auto-release countdown begins
   delivered // Buyer marked received (optional intermediate step)
-  completed // Token released, fee taken, seller paid
-  disputed // Buyer opened dispute; token frozen
-  refunded // Token returned to buyer via Bitnob NGN payout
+  completed // MavaPay withdrawal to seller processed
+  disputed // Buyer opened dispute; funds frozen in MavaPay wallet
+  refunded // Funds returned to buyer via MavaPay
 }
 
 // --------------------------------------------------------------------------
@@ -50,12 +50,17 @@ model Seller {
   category String
   bio      String?
 
-  // Payout details — NGN bank transfer (off-ramp via Bitnob, mocked for MVP)
-  bankName    String?
-  bankAccount String?
-  bankHolder  String?
+  // Payout details — NGN bank transfer (via MavaPay)
+  bankName    String? // Bank name (e.g. "GTBank")
+  bankCode    String? // Bank code for MavaPay (e.g. "058" for GTBank)
+  bankAccount String? // Account number
+  bankHolder  String? // Account name submitted by seller
 
-  // OR direct Lightning payout (preferred for MVP since Bitnob is mocked)
+  // MavaPay Name Enquiry verification — populated when bank details are set
+  bankVerifiedName String?   // Name returned by MavaPay Name Enquiry API
+  bankVerifiedAt   DateTime? // When Name Enquiry was last verified
+
+  // OR direct Lightning payout
   lnAddress String?
 
   verified  Boolean  @default(false)
@@ -112,8 +117,7 @@ model Order {
   sellerId  String
   seller    Seller  @relation(fields: [sellerId], references: [id])
 
-  // Buyer's one-time Nostr pubkey (hex). The Cashu token is P2PK-locked to
-  // this key — only the holder of the matching secret can release the funds.
+  // Buyer's one-time Nostr pubkey — their identity for this transaction
   buyerNpub   String
   buyerPubkey String
 
@@ -126,19 +130,14 @@ model Order {
 
   variant String?
 
-  amountNGN  Int
-  amountSats Int
+  amountNGN Int // In whole naira (converted to kobo for MavaPay API)
 
   status EscrowStatus @default(pending_payment)
 
-  // The locked Cashu token (serialized cashuA... blob). Stored encrypted
-  // post-MVP; for hackathon stored as-is since the testnet mint has no
-  // real funds at stake.
-  cashuToken String?
-
-  // Bitnob virtual account assigned at order creation (24h expiry)
-  bitnobAccount String?
-  bitnobBank    String?
+  // MavaPay references
+  mavapayPaymentLinkId String? // Quote orderId (e.g. "43477-4306") for webhook matching
+  mavapayPaymentRef    String? // Transaction reference from webhook
+  mavapayQuoteData     Json?   // Pay-in quote response (bank details, expiry, etc.)
 
   trackingNumber String?
   carrier        String?
@@ -149,8 +148,6 @@ model Order {
 
   // 7 days after shipped — silent-buyer protection
   autoReleaseAt DateTime?
-  // Virtual account expiry
-  expiresAt     DateTime?
 
   notes String?
 
@@ -163,6 +160,19 @@ model Order {
   @@index([buyerPubkey])
   @@index([status])
   @@index([autoReleaseAt]) // background job scans here
+}
+
+// --------------------------------------------------------------------------
+// WebhookEvent — idempotency log for incoming MavaPay webhooks
+// --------------------------------------------------------------------------
+model WebhookEvent {
+  id          String   @id @default(cuid())
+  provider    String   // "mavapay"
+  externalId  String   @unique // Dedupe key from MavaPay
+  payload     Json
+  status      String   // "received" | "processed" | "failed"
+  attempts    Int      @default(0)
+  receivedAt  DateTime @default(now())
 }
 
 // --------------------------------------------------------------------------

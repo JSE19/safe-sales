@@ -70,17 +70,6 @@ export class ServiceUnavailable extends HttpError {
 }
 
 /**
- * 503 specifically because the Cashu mint failed. Distinct code so the
- * frontend can show a "mint busy, retry in a moment" message rather than
- * the generic "something broke".
- */
-export class CashuMintUnavailable extends HttpError {
-  constructor(message: string, details?: unknown) {
-    super(503, 'CASHU_MINT_UNAVAILABLE', message, details);
-  }
-}
-
-/**
  * Crypto-safe random short-id for orders. Format: "SS-XXXX" (4 base32 chars).
  */
 export function generateShortId(): string {
